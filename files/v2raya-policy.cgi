@@ -68,6 +68,21 @@ for _, s in ipairs(touch.servers or {}) do
 end
 LUA
 }
+find_sole_placeholder_id(){ lua - "$1" <<'LUA'
+local json = require "luci.jsonc"
+local f = io.open(arg[1], "r")
+local obj = json.parse(f and f:read("*a") or "{}") or {}
+if f then f:close() end
+local touch = obj.data and obj.data.touch or {}
+if #(touch.subscriptions or {}) > 0 then return end
+local servers = touch.servers or {}
+if #servers ~= 1 then return end
+local s = servers[1]
+if tostring(s.address or ""):match("^1%.1%.1%.1") then
+  print(tostring(s.id or ""))
+end
+LUA
+}
 outbound_in_use_by_others(){
   local mac="$1" outbound="$2"
   awk -v m="$mac" -v o="$outbound" 'BEGIN{IGNORECASE=1} !/^#/ && NF>=3 && tolower($1)!=tolower(m) && $3==o { found=1; exit } END{ exit(found?0:1) }' "$MAP" 2>/dev/null
@@ -87,6 +102,20 @@ ensure_placeholder_ref(){
   rm -f "$tmp_ph_link" "$tmp_ph_payload"
   curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$touch_file" 2>/dev/null || echo '{}' > "$touch_file"
   find_placeholder_ref "$touch_file"
+}
+prepare_real_id_slot(){
+  local token2="$1" tmp_touch phid tmp_delete
+  tmp_touch="/tmp/v2raya-prepare-real-touch.$$"
+  curl -fsS -m 10 -H "Authorization: $token2" "$V2RAYA_API/api/touch" > "$tmp_touch" 2>/dev/null || echo '{}' > "$tmp_touch"
+  phid="$(find_sole_placeholder_id "$tmp_touch" || true)"
+  if [ -n "$phid" ]; then
+    tmp_delete="/tmp/v2raya-prepare-real-delete.$$"
+    delete_touch_payload server "$phid" 0 > "$tmp_delete"
+    curl -fsS -m 30 -X DELETE -H "Content-Type: application/json" -H "Authorization: $token2" --data-binary @"$tmp_delete" "$V2RAYA_API/api/touch" >/dev/null 2>&1 || true
+    rm -f "$tmp_delete"
+    sleep 1
+  fi
+  rm -f "$tmp_touch"
 }
 restore_outbound_to_placeholder(){
   local outbound="$1" token2 tmp_touch placeholder_ref ph_typ ph_id ph_sub
@@ -354,6 +383,7 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
           tmp_payload="/tmp/v2raya-create-node-payload.$$"
           printf "%s" "$link" > "$tmp_create"
           if [ -n "$token2" ]; then
+            prepare_real_id_slot "$token2"
             json_payload_from_file "$tmp_create" > "$tmp_payload"
             resp="$(curl -fsS -m 120 -H "Content-Type: application/json" -H "Authorization: $token2" --data-binary @"$tmp_payload" "$V2RAYA_API/api/import" 2>/dev/null || true)"
             rm -f "$tmp_create" "$tmp_payload"
@@ -405,7 +435,7 @@ cat <<'HTML'
 HTML
 /usr/libexec/v2raya-devices-html.lua
 cat <<'HTML'
-</tbody></table></div></section><section class="panel wide"><h2 class="panel-head"><span>&#19968;&#38190;&#23548;&#20837;&#20195;&#29702; IP / &#33410;&#28857;</span><span class="head-actions"><button class="head-btn" type="button" id="createToggle">sk5&#28155;&#21152;&#20837;&#21475;</button><a class="head-btn" href="#importText">&#23548;&#20837;</a></span></h2><div class="content"><form method="post" id="createBox" class="create-box"><input type="hidden" name="action" value="create_node"><div class="create-grid"><label>&#21327;&#35758;<select name="create_protocol"><option value="socks5">SOCKS5</option></select></label><label class="node-label">&#33410;&#28857;&#21517;<input name="create_name" placeholder="HK-01"></label><label>&#22320;&#22336;<input name="create_address" required placeholder="example.com"></label><label>&#31471;&#21475;<input name="create_port" required inputmode="numeric" placeholder="1080"></label><label>&#29992;&#25143;&#21517;<input name="create_uuid" placeholder="&#21487;&#31354;"></label><label>&#23494;&#30721;<input name="create_password" placeholder="&#21487;&#31354;"></label><input type="hidden" name="create_method" value=""><input type="hidden" name="create_tls" value="none"><button class="create-submit" type="submit">&#28155;&#21152;&#21040;ip&#21015;&#34920;</button></div></form><div class="section-note">&#19968;&#34892;&#19968;&#20010;&#33410;&#28857;&#65292;&#21482;&#23548;&#20837;&#21040;&#20195;&#29702; IP &#21015;&#34920;&#65292;&#19981;&#33258;&#21160;&#32465;&#23450;&#35774;&#22791;&#12290;</div><form method="post" id="importForm"><input type="hidden" name="action" value="import"><textarea name="import_text" id="importText" placeholder="socks5://user:pass@example.com:1080#name"></textarea><div class="import-actions"><button type="submit">&#21482;&#23548;&#20837;&#20195;&#29702; IP &#21015;&#34920;</button></div></form></div></section><section class="panel wide"><h2>&#35774;&#22791;&#20986;&#21475;&#32465;&#23450;&#65306;&#35774;&#22791;01-&#35774;&#22791;20 -> &#33410;&#28857; ID</h2><div class="content"><div class="section-note">&#36825;&#37324;&#30340;&#39034;&#24207;&#22266;&#23450;&#20026; &#35774;&#22791;01 &#21040; &#35774;&#22791;20&#12290;&#26032;&#22686;&#33410;&#28857;&#21518;&#65292;&#22312;&#36825;&#37324;&#25226;&#23545;&#24212; &#35774;&#22791; &#32465;&#21040; ID2/ID3/ID4...</div>
+</tbody></table></div></section><section class="panel wide"><h2 class="panel-head"><span>&#19968;&#38190;&#23548;&#20837;&#20195;&#29702; IP / &#33410;&#28857;</span><span class="head-actions"><button class="head-btn" type="button" id="createToggle">sk5&#28155;&#21152;&#20837;&#21475;</button><a class="head-btn" href="#importText">&#23548;&#20837;</a></span></h2><div class="content"><form method="post" id="createBox" class="create-box"><input type="hidden" name="action" value="create_node"><div class="create-grid"><label>&#21327;&#35758;<select name="create_protocol"><option value="socks5">SOCKS5</option></select></label><label class="node-label">&#33410;&#28857;&#21517;<input name="create_name" placeholder="HK-01"></label><label>&#22320;&#22336;<input name="create_address" required placeholder="example.com"></label><label>&#31471;&#21475;<input name="create_port" required inputmode="numeric" placeholder="1080"></label><label>&#29992;&#25143;&#21517;<input name="create_uuid" placeholder="&#21487;&#31354;"></label><label>&#23494;&#30721;<input name="create_password" placeholder="&#21487;&#31354;"></label><input type="hidden" name="create_method" value=""><input type="hidden" name="create_tls" value="none"><button class="create-submit" type="submit">&#28155;&#21152;&#21040;ip&#21015;&#34920;</button></div></form><div class="section-note">&#19968;&#34892;&#19968;&#20010;&#33410;&#28857;&#65292;&#21482;&#23548;&#20837;&#21040;&#20195;&#29702; IP &#21015;&#34920;&#65292;&#19981;&#33258;&#21160;&#32465;&#23450;&#35774;&#22791;&#12290;</div><form method="post" id="importForm"><input type="hidden" name="action" value="import"><textarea name="import_text" id="importText" placeholder="socks5://user:pass@example.com:1080#name"></textarea><div class="import-actions"><button type="submit">&#21482;&#23548;&#20837;&#20195;&#29702; IP &#21015;&#34920;</button></div></form></div></section><section class="panel wide"><h2>&#35774;&#22791;&#20986;&#21475;&#32465;&#23450;&#65306;&#35774;&#22791;01-&#35774;&#22791;20 -> &#33410;&#28857; ID</h2><div class="content"><div class="section-note">&#36825;&#37324;&#30340;&#39034;&#24207;&#22266;&#23450;&#20026; &#35774;&#22791;01 &#21040; &#35774;&#22791;20&#12290;&#26032;&#22686;&#33410;&#28857;&#21518;&#65292;&#22312;&#36825;&#37324;&#25226;&#23545;&#24212; &#35774;&#22791; &#32465;&#21040;&#21487;&#29992;&#30340;&#33410;&#28857; ID &#21363;&#21487;&#12290;</div>
 HTML
 BIND_OK="$BIND_OK" /usr/libexec/v2raya-bind-html.lua "$touch_file" "$MAP"
 cat <<'HTML'

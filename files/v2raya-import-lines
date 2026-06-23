@@ -38,6 +38,24 @@ for _, s in ipairs(t.servers or {}) do print(s.id) end
 LUA
 }
 
+sole_placeholder_id() {
+  lua - "$1" <<'LUA'
+local json = require "luci.jsonc"
+local path = arg[1]
+local f = io.open(path, "r")
+local obj = nil
+if f then obj = json.parse(f:read("*a") or ""); f:close() end
+local t = obj and obj.data and obj.data.touch or {}
+if #(t.subscriptions or {}) > 0 then return end
+local servers = t.servers or {}
+if #servers ~= 1 then return end
+local s = servers[1]
+if tostring(s.address or ""):match("^1%.1%.1%.1") then
+  print(tostring(s.id or ""))
+end
+LUA
+}
+
 server_keys() {
   lua - "$1" <<'LUA'
 local json = require "luci.jsonc"
@@ -108,6 +126,20 @@ if best then print(best) end
 LUA
 }
 
+prepare_real_id_slot() {
+  curl -fsS -m 15 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$tmp.prepare.touch" || true
+  phid="$(sole_placeholder_id "$tmp.prepare.touch" || true)"
+  [ -n "$phid" ] || return 0
+  lua - "$phid" > "$tmp.delete.payload" <<'LUA'
+local json = require "luci.jsonc"
+local id = tonumber(arg[1] or "")
+if not id then os.exit(1) end
+print(json.stringify({ touches = { { id = id, _type = "server", sub = 0 } } }))
+LUA
+  curl -fsS -m 30 -X DELETE -H 'Content-Type: application/json' -H "Authorization: $token" --data-binary @"$tmp.delete.payload" "$V2RAYA_API/api/touch" >/dev/null 2>&1 || true
+  sleep 1
+}
+
 tmp_login="$tmp.login"
 lua - "$V2RAYA_USER" "$V2RAYA_PASS" > "$tmp_login" <<'LUA'
 local json = require "luci.jsonc"
@@ -116,6 +148,8 @@ LUA
 login_json="$(curl -fsS -m 10 -H 'Content-Type: application/json' --data-binary @"$tmp_login" "$V2RAYA_API/api/login")"
 token="$(printf '%s' "$login_json" | jsonfilter -q -e '@.data.token' 2>/dev/null || true)"
 [ -n "$token" ] || { echo "v2rayA login failed" > "$SUMMARY"; exit 1; }
+
+prepare_real_id_slot
 
 line_no=0
 ok_count=0

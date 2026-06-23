@@ -25,24 +25,22 @@ end
 local obj = json.parse(readfile(path)) or {}
 local touch = obj.data and obj.data.touch or {}
 local servers, placeholders = {}, {}
-local first_placeholder = nil
+local real_server_idx = 0
 
 for _, s in ipairs(touch.servers or {}) do
   local key = "server|" .. tostring(s.id) .. "|0"
   if tostring(s.address or ""):match("^1%.1%.1%.1") then
     placeholders[key] = s
-    if not first_placeholder then
-      first_placeholder = s
-    end
   else
+    real_server_idx = real_server_idx + 1
     table.insert(servers, {
       value = key,
       key = key,
-      id = "ID" .. s.id,
+      id = "ID" .. real_server_idx,
       name = s.name or "",
       address = s.address or "",
       net = s.net or "",
-      label = "ID" .. s.id .. " - " .. (s.name or "") .. " - " .. (s.address or "")
+      label = "ID" .. real_server_idx .. " - " .. (s.name or "") .. " - " .. (s.address or "")
     })
   end
 end
@@ -102,8 +100,8 @@ for _, c in ipairs(touch.connectedServer or {}) do
 end
 
 local bind_ok = os.getenv("BIND_OK") or ""
-local placeholder_id = first_placeholder and ("ID" .. tostring(first_placeholder.id)) or "-"
-local placeholder_desc = first_placeholder and (placeholder_id .. " &#34394;&#25311;&#21344;&#20301;&#33410;&#28857;") or "&#34394;&#25311;&#21344;&#20301;&#33410;&#28857;"
+local placeholder_id = "-"
+local placeholder_desc = "&#34394;&#25311;&#21344;&#20301;&#33410;&#28857;"
 
 print('<form method="post" id="deleteNodesForm" class="node-delete-box"><input type="hidden" name="action" value="delete_nodes"><input type="hidden" name="delete_refs" id="deleteRefs"><div class="node-delete-title">&#21024;&#38500;&#20195;&#29702; IP &#33410;&#28857;</div><div class="node-delete-list">')
 if #servers == 0 then
@@ -132,8 +130,8 @@ for i = 1, 20 do
     cur_id = "-"
     cur_node = '<div class="node-name">1.1.1.1</div><div class="small">&#34394;&#25311;&#21344;&#20301;&#33410;&#28857;</div>'
     if placeholders[cur_key] then
-      cur_id = "ID" .. placeholders[cur_key].id
-      cur_node = '<div class="node-name">1.1.1.1</div><div class="small">ID' .. placeholders[cur_key].id .. ' &#34394;&#25311;&#21344;&#20301;&#33410;&#28857;</div>'
+      cur_id = "-"
+      cur_node = '<div class="node-name">1.1.1.1</div><div class="small">&#34394;&#25311;&#21344;&#20301;&#33410;&#28857;</div>'
     end
     for _, s in ipairs(servers) do
       if s.key == cur_key then
