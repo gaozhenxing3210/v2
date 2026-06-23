@@ -67,6 +67,31 @@ cd v2raya-policy-kit
 sh install.sh
 ```
 
+如果你通过 LuCI 页面上传，文件通常会在 `/tmp/upload/v2raya-policy-kit.tar.gz`，可以直接执行：
+
+```sh
+cd /tmp/upload
+rm -rf v2raya-policy-kit v2-main
+tar -xzf v2raya-policy-kit.tar.gz
+INSTALL_SH="$(find . -name install.sh 2>/dev/null | head -n 1)"
+cd "$(dirname "$INSTALL_SH")"
+sh install.sh
+```
+
+也可以只下载仓库里的小脚本，让它自动使用 `/tmp/upload/v2raya-policy-kit.tar.gz` 并执行安装：
+
+```sh
+wget -O /tmp/run-local.sh https://raw.githubusercontent.com/gaozhenxing3210/v2/main/run-local.sh
+sh /tmp/run-local.sh
+```
+
+如果包放在局域网电脑上，例如 `http://192.168.6.190:8899/v2raya-policy-kit.tar.gz`：
+
+```sh
+wget -O /tmp/run-local.sh https://raw.githubusercontent.com/gaozhenxing3210/v2/main/run-local.sh
+KIT_URL='http://192.168.6.190:8899/v2raya-policy-kit.tar.gz' sh /tmp/run-local.sh
+```
+
 ## 常用参数
 
 默认安装不会改 LAN IP、不会改网段、不会恢复旧设备绑定。
