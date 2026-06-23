@@ -16,6 +16,9 @@ INSTALL_OFFLINE_IPKS="${INSTALL_OFFLINE_IPKS:-auto}"
 INSTALL_DNSMASQ_FULL="${INSTALL_DNSMASQ_FULL:-0}"
 ENABLE_8088_ENTRY="${ENABLE_8088_ENTRY:-1}"
 ENABLE_BBR="${ENABLE_BBR:-1}"
+OPTIMIZE_ROUTER="${OPTIMIZE_ROUTER:-1}"
+OPTIMIZE_WIFI="${OPTIMIZE_WIFI:-1}"
+LEAN_SERVICES="${LEAN_SERVICES:-1}"
 
 [ "$RESTORE_FULL" = "1" ] && {
   RESTORE_V2RAYA_DB=1
@@ -157,6 +160,88 @@ ensure_geo_symlinks() {
   return 0
 }
 
+service_exists() {
+  [ -x "/etc/init.d/$1" ]
+}
+
+disable_service_if_present() {
+  svc="$1"
+  service_exists "$svc" || return 0
+  /etc/init.d/"$svc" stop >/dev/null 2>&1 || true
+  /etc/init.d/"$svc" disable >/dev/null 2>&1 || true
+}
+
+optimize_router_runtime() {
+  [ "$OPTIMIZE_ROUTER" = "1" ] || return 0
+
+  mkdir -p /etc/sysctl.d /etc/modules.d
+  modprobe sch_fq 2>/dev/null || true
+  modprobe tcp_bbr 2>/dev/null || true
+
+  {
+    echo "tcp_bbr"
+    echo "sch_fq"
+  } >/etc/modules.d/92-v2raya-performance
+
+  cat >/etc/sysctl.d/92-v2raya-performance.conf <<'EOF'
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+net.ipv4.tcp_fastopen=3
+net.netfilter.nf_conntrack_tcp_be_liberal=1
+EOF
+  sysctl -p /etc/sysctl.d/92-v2raya-performance.conf >/dev/null 2>&1 || true
+
+  uci -q set network.globals=globals || true
+  uci -q set network.globals.packet_steering='1' || true
+  uci -q set firewall.@defaults[0].flow_offloading='1' || true
+  uci -q set firewall.@defaults[0].flow_offloading_hw='1' || true
+  uci -q set system.@system[0].log_size='64' || true
+  uci -q set system.@system[0].conloglevel='5' || true
+  uci commit network 2>/dev/null || true
+  uci commit firewall 2>/dev/null || true
+  uci commit system 2>/dev/null || true
+}
+
+optimize_wifi_runtime() {
+  [ "$OPTIMIZE_WIFI" = "1" ] || return 0
+  uci show wireless >/dev/null 2>&1 || return 0
+
+  for section in $(uci show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-device$/\1/p"); do
+    band="$(uci -q get wireless.$section.band)"
+    hwmode="$(uci -q get wireless.$section.hwmode)"
+    [ -n "$(uci -q get wireless.$section.country)" ] || uci -q set wireless.$section.country='CN'
+    uci -q set wireless.$section.channel='auto'
+    uci -q set wireless.$section.cell_density='0'
+    case "$band:$hwmode" in
+      2g:*|*:11g*|*:11ng*)
+        uci -q set wireless.$section.htmode='HE40'
+        uci -q set wireless.$section.noscan='1'
+        ;;
+      5g:*|6g:*|*:11a*|*:11na*|*:11ac*)
+        uci -q set wireless.$section.htmode='HE80'
+        ;;
+    esac
+  done
+
+  for section in $(uci show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do
+    uci -q set wireless.$section.disassoc_low_ack='0'
+    uci -q set wireless.$section.wmm='1'
+  done
+
+  uci commit wireless 2>/dev/null || true
+}
+
+lean_services_runtime() {
+  [ "$LEAN_SERVICES" = "1" ] || return 0
+  for svc in \
+    adguardhome adbyby alist aria2 filebrowser frpc frps heimdall homeproxy mihomo mosdns \
+    minidlna miniupnpd netdata nginx openclash qbittorrent sing-box smartdns sqm tailscale \
+    ttyd vsftpd zerotier dockerd containerd
+  do
+    disable_service_if_present "$svc"
+  done
+}
+
 lan_ip() {
   uci -q get network.lan.ipaddr 2>/dev/null || echo 192.168.1.1
 }
@@ -232,10 +317,15 @@ if [ "$ENABLE_BBR" = "1" ]; then
   mkdir -p /etc/modules.d /etc/sysctl.d
   echo tcp_bbr >/etc/modules.d/tcp-bbr
   cat >/etc/sysctl.d/99-bbr.conf <<'EOF'
+net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
 EOF
   sysctl -p /etc/sysctl.d/99-bbr.conf >/dev/null 2>&1 || true
 fi
+
+optimize_router_runtime
+optimize_wifi_runtime
+lean_services_runtime
 
 if [ "$ENABLE_8088_ENTRY" = "1" ]; then
   cat >/www/v2raya-policy-index.html <<'EOF'
@@ -268,6 +358,9 @@ fi
 
 /etc/init.d/v2raya enable >/dev/null 2>&1 || true
 /etc/init.d/v2raya restart >/dev/null 2>&1 || /etc/init.d/v2raya start >/dev/null 2>&1 || true
+/etc/init.d/firewall restart >/dev/null 2>&1 || true
+/etc/init.d/network reload >/dev/null 2>&1 || true
+/sbin/wifi reload >/dev/null 2>&1 || wifi reload >/dev/null 2>&1 || true
 sleep 3
 
 echo "[6/8] applying policy logic"
@@ -286,6 +379,7 @@ echo "Panel login: $PANEL_USER / $PANEL_PASS"
 echo "v2rayA Web: http://$(lan_ip):2017/"
 echo "Device map restore: RESTORE_DEVICE_MAP=$RESTORE_DEVICE_MAP, RESET_DEVICE_MAP=$RESET_DEVICE_MAP"
 echo "v2rayA DB restore: RESTORE_V2RAYA_DB=$RESTORE_V2RAYA_DB"
+echo "Router tuning: OPTIMIZE_ROUTER=$OPTIMIZE_ROUTER, OPTIMIZE_WIFI=$OPTIMIZE_WIFI, LEAN_SERVICES=$LEAN_SERVICES, ENABLE_BBR=$ENABLE_BBR"
 echo
 echo "This installer does not change the LAN IP or netmask."
 echo "If v2rayA login failed during apply, open v2rayA Web once and create/login the admin account,"

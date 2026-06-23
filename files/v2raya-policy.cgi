@@ -232,7 +232,7 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
       if valid_outbound "$outbound" && [ "$ref" = "virtual|0|0" ]; then
         message="$outbound &#24403;&#21069;&#26159; 1.1.1.1 &#34394;&#25311;&#21344;&#20301;&#65292;&#21518;&#21488;&#31574;&#30053;&#19981;&#21464;"
       elif valid_outbound "$outbound" && echo "$id" | grep -Eq '^[0-9]+$' && echo "$sub" | grep -Eq '^[0-9]+$' && echo "$typ" | grep -Eq '^(server|subscriptionServer)$'; then
-        if /usr/bin/v2raya-bind "$outbound" "$id" "$typ" "$sub" >/dev/null 2>&1; then message="&#24050;&#32465;&#23450; $outbound -> ID$id"; bind_ok="$outbound"; "$APPLY" >/dev/null 2>&1 || true; else message="&#32465;&#23450;&#22833;&#36133;&#65292;&#35831;&#26816;&#26597; ID &#26159;&#21542;&#23384;&#22312;"; fi
+        if /usr/bin/v2raya-bind "$outbound" "$id" "$typ" "$sub" >/dev/null 2>&1; then message="&#24050;&#32465;&#23450; $outbound -> ID$id"; bind_ok="$outbound"; else message="&#32465;&#23450;&#22833;&#36133;&#65292;&#35831;&#26816;&#26597; ID &#26159;&#21542;&#23384;&#22312;"; fi
       else message="&#32465;&#23450;&#21442;&#25968;&#19981;&#23545;"; fi ;;
     delete_node)
       ref="$(get_param server_ref "$BODY")"; typ="$(echo "$ref" | cut -d'|' -f1)"; id="$(echo "$ref" | cut -d'|' -f2)"; sub="$(echo "$ref" | cut -d'|' -f3)"
@@ -310,7 +310,6 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
               resp="$(curl -fsS -m 30 -X DELETE -H "Content-Type: application/json" -H "Authorization: $token2" --data-binary @"$tmp_delete" "$V2RAYA_API/api/touch" 2>/dev/null || true)"
               code="$(printf "%s" "$resp" | jsonfilter -q -e "@.code" 2>/dev/null || true)"
               if [ "$code" = "SUCCESS" ]; then
-                "$APPLY" >/dev/null 2>&1 || true
                 message="&#24050;&#21024;&#38500;&#21246;&#36873;&#30340;&#20195;&#29702;&#33410;&#28857;&#65292;&#24050;&#30452;&#25509;&#29983;&#25928;"
                 [ "$rebind_count" -gt 0 ] && message="$message<br>&#24050;&#20808;&#25226; $rebind_count &#20010;&#20986;&#21475;&#20999;&#21040; 1.1.1.1 &#34394;&#25311;&#21344;&#20301;"
               else
@@ -334,7 +333,6 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
         rm -f "$tmp_import"
         if printf '%s' "$summary" | grep -q 'OK='; then
           message="<pre>$(printf '%s' "$summary" | html_escape)</pre>"
-          "$APPLY" >/dev/null 2>&1 || true
         else
           message="&#23548;&#20837;&#22833;&#36133;&#65306;<pre>$(printf '%s' "${summary:-unknown error}" | html_escape)</pre>"
         fi

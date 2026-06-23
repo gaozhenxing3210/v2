@@ -9,6 +9,28 @@ MAP="/etc/v2raya-policy.map"
 /usr/libexec/v2raya-policy-build.lua
 ALLOW_MACS="$(cat /tmp/v2raya-policy.allow-macs 2>/dev/null || true)"
 COUNT="$(cat /tmp/v2raya-policy.active-count 2>/dev/null || echo 0)"
+setting_needs_sync() {
+  lua - "$1" "$2" <<'LUA'
+local json = require "luci.jsonc"
+local desired_path, current_path = arg[1], arg[2]
+local function read_json(path)
+  local f = io.open(path, "r")
+  local s = f and f:read("*a") or ""
+  if f then f:close() end
+  return json.parse(s) or {}
+end
+local desired = read_json(desired_path)
+local current = read_json(current_path)
+current = current.data and current.data.setting or current.setting or current or {}
+for k, v in pairs(desired) do
+  if tostring(current[k]) ~= tostring(v) then
+    print("1")
+    return
+  end
+end
+print("0")
+LUA
+}
 {
   echo '# v2rayA device allowlist'
   echo '# Managed by /cgi-bin/v2raya-policy.'
@@ -40,14 +62,20 @@ login_json="$(curl -fsS -m 10 -H 'Content-Type: application/json' --data-binary 
 rm -f "$tmp_login"
 token="$(printf '%s' "$login_json" | jsonfilter -q -e '@.data.token' 2>/dev/null || true)"
 if [ -n "$token" ]; then
-  # Critical: v2rayA must use the real RoutingA enum, otherwise source(IP) rules are saved but not compiled into Xray.
-  curl -fsS -m 10 -X PUT -H 'Content-Type: application/json' -H "Authorization: $token" --data-binary @/etc/v2raya-policy.setting.json "$V2RAYA_API/api/setting" >/dev/null || true
+  tmp_touch="/tmp/v2raya-apply-touch.$$"
+  tmp_setting="/tmp/v2raya-apply-setting.$$"
+  curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$tmp_touch" 2>/dev/null || echo '{}' > "$tmp_touch"
+  curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/setting" > "$tmp_setting" 2>/dev/null || echo '{}' > "$tmp_setting"
+  running="$(jsonfilter -q -i "$tmp_touch" -e '@.data.running' 2>/dev/null || echo false)"
+  sync_setting="$(setting_needs_sync /etc/v2raya-policy.setting.json "$tmp_setting" 2>/dev/null || echo 1)"
+  rm -f "$tmp_touch" "$tmp_setting"
   curl -fsS -m 10 -X PUT -H 'Content-Type: application/json' -H "Authorization: $token" --data-binary @/tmp/v2raya-policy.routing.json "$V2RAYA_API/api/routingA" >/dev/null || true
-  if [ "$COUNT" -gt 0 ]; then
-    curl -fsS -m 10 -X DELETE -H "Authorization: $token" "$V2RAYA_API/api/v2ray" >/dev/null 2>&1 || true
-    sleep 1
+  if [ "$sync_setting" = "1" ]; then
+    # Write RoutingA first, then sync the desired v2rayA setting once so the core rebuild sees the latest source-IP rules.
+    curl -fsS -m 10 -X PUT -H 'Content-Type: application/json' -H "Authorization: $token" --data-binary @/etc/v2raya-policy.setting.json "$V2RAYA_API/api/setting" >/dev/null || true
+  fi
+  if [ "$COUNT" -gt 0 ] && { [ "$sync_setting" != "1" ] || [ "$running" != "true" ]; }; then
     curl -fsS -m 20 -X POST -H 'Content-Type: application/json' -H "Authorization: $token" -d '{}' "$V2RAYA_API/api/v2ray" >/dev/null || true
-    sleep 2
   fi
 fi
 /usr/bin/v2raya-device-policy >/dev/null 2>&1 || true
