@@ -28,6 +28,59 @@ LUA
   rm -f "$tmp_login"
   printf '%s' "$login_json" | jsonfilter -q -e '@.data.token' 2>/dev/null || true
 }
+api_create_outbound(){
+  local token="$1" outbound="$2" tmp_outbound
+  [ -n "$token" ] || return 1
+  [ -n "$outbound" ] || return 1
+  tmp_outbound="/tmp/v2raya-outbound.$$"
+  lua - "$outbound" > "$tmp_outbound" <<'LUA'
+local json = require "luci.jsonc"
+print(json.stringify({ outbound = arg[1] or "" }))
+LUA
+  curl -fsS -m 15 -H "Content-Type: application/json" -H "Authorization: $token" --data-binary @"$tmp_outbound" "$V2RAYA_API/api/outbound" >/dev/null 2>&1 || true
+  rm -f "$tmp_outbound"
+}
+proxy_ref_from_touch(){ lua - "$1" <<'LUA'
+local json = require "luci.jsonc"
+local f = io.open(arg[1], "r")
+local obj = json.parse(f and f:read("*a") or "{}") or {}
+if f then f:close() end
+local touch = obj.data and obj.data.touch or {}
+for _, c in ipairs(touch.connectedServer or {}) do
+  if tostring(c.outbound or "") == "proxy" then
+    print(table.concat({ tostring(c._type or "server"), tostring(c.id or ""), tostring(c.sub or 0) }, "|"))
+    return
+  end
+end
+LUA
+}
+touch_running_state(){
+  jsonfilter -q -i "$1" -e '@.data.running' 2>/dev/null || true
+}
+bootstrap_bind_runtime(){
+  local outbound="$1" typ="$2" id="$3" sub="$4" token2 tmp_touch proxy_ref running
+  token2="$(api_login)"
+  [ -n "$token2" ] || return 1
+  api_create_outbound "$token2" "proxy"
+  [ "$outbound" = "proxy" ] || api_create_outbound "$token2" "$outbound"
+  tmp_touch="/tmp/v2raya-bind-touch.$$"
+  curl -fsS -m 10 -H "Authorization: $token2" "$V2RAYA_API/api/touch" > "$tmp_touch" 2>/dev/null || echo '{}' > "$tmp_touch"
+  proxy_ref="$(proxy_ref_from_touch "$tmp_touch" || true)"
+  if [ -z "$proxy_ref" ] && [ -n "$id" ] && [ -n "$typ" ]; then
+    /usr/bin/v2raya-bind proxy "$id" "$typ" "$sub" >/dev/null 2>&1 || true
+  fi
+  rm -f "$tmp_touch"
+}
+start_runtime_if_possible(){
+  local token2="$1" tmp_touch running
+  [ -n "$token2" ] || return 1
+  tmp_touch="/tmp/v2raya-runtime-touch.$$"
+  curl -fsS -m 10 -H "Authorization: $token2" "$V2RAYA_API/api/touch" > "$tmp_touch" 2>/dev/null || echo '{}' > "$tmp_touch"
+  running="$(touch_running_state "$tmp_touch")"
+  rm -f "$tmp_touch"
+  [ "$running" = "true" ] && return 0
+  curl -fsS -m 20 -X POST -H "Authorization: $token2" "$V2RAYA_API/api/v2ray" >/tmp/v2raya-runtime-start.log 2>&1 || true
+}
 json_payload_from_file(){ lua - "$1" <<'LUA'
 local json = require "luci.jsonc"
 local path = arg[1]
@@ -261,7 +314,15 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
       if valid_outbound "$outbound" && [ "$ref" = "virtual|0|0" ]; then
         message="$outbound &#24403;&#21069;&#26159; 1.1.1.1 &#34394;&#25311;&#21344;&#20301;&#65292;&#21518;&#21488;&#31574;&#30053;&#19981;&#21464;"
       elif valid_outbound "$outbound" && echo "$id" | grep -Eq '^[0-9]+$' && echo "$sub" | grep -Eq '^[0-9]+$' && echo "$typ" | grep -Eq '^(server|subscriptionServer)$'; then
-        if /usr/bin/v2raya-bind "$outbound" "$id" "$typ" "$sub" >/dev/null 2>&1; then message="&#24050;&#32465;&#23450; $outbound -> ID$id"; bind_ok="$outbound"; else message="&#32465;&#23450;&#22833;&#36133;&#65292;&#35831;&#26816;&#26597; ID &#26159;&#21542;&#23384;&#22312;"; fi
+        bootstrap_bind_runtime "$outbound" "$typ" "$id" "$sub" >/dev/null 2>&1 || true
+        if /usr/bin/v2raya-bind "$outbound" "$id" "$typ" "$sub" >/dev/null 2>&1; then
+          token2="$(api_login)"
+          [ -n "$token2" ] && start_runtime_if_possible "$token2" >/dev/null 2>&1 || true
+          message="&#24050;&#32465;&#23450; $outbound -> ID$id"
+          bind_ok="$outbound"
+        else
+          message="&#32465;&#23450;&#22833;&#36133;&#65292;&#35831;&#26816;&#26597; ID &#26159;&#21542;&#23384;&#22312;"
+        fi
       else message="&#32465;&#23450;&#21442;&#25968;&#19981;&#23545;"; fi ;;
     delete_node)
       ref="$(get_param server_ref "$BODY")"; typ="$(echo "$ref" | cut -d'|' -f1)"; id="$(echo "$ref" | cut -d'|' -f2)"; sub="$(echo "$ref" | cut -d'|' -f3)"

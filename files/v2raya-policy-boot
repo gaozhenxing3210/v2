@@ -7,6 +7,21 @@ start() {
     sleep 12
     /etc/init.d/v2raya enable >/dev/null 2>&1 || true
     /etc/init.d/v2raya restart >/dev/null 2>&1 || /etc/init.d/v2raya start >/dev/null 2>&1 || true
+    if [ -f /etc/v2raya-policy.auth ]; then
+      . /etc/v2raya-policy.auth
+      : "${V2RAYA_API:=http://127.0.0.1:2017}"
+      : "${V2RAYA_USER:=admin}"
+      : "${V2RAYA_PASS:=weifeng}"
+      cat >/tmp/v2raya-policy-boot-login.json <<EOF
+{"username":"$V2RAYA_USER","password":"$V2RAYA_PASS"}
+EOF
+      token="$(curl -fsS -m 10 -H 'Content-Type: application/json' --data-binary @/tmp/v2raya-policy-boot-login.json "$V2RAYA_API/api/login" 2>/dev/null | jsonfilter -q -e '@.data.token' 2>/dev/null || true)"
+      rm -f /tmp/v2raya-policy-boot-login.json
+      if [ -n "$token" ]; then
+        running="$(curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" 2>/dev/null | jsonfilter -q -e '@.data.running' 2>/dev/null || true)"
+        [ "$running" = "true" ] || curl -fsS -m 20 -X POST -H "Authorization: $token" "$V2RAYA_API/api/v2ray" >/tmp/v2raya-policy-boot-api.log 2>&1 || true
+      fi
+    fi
     /etc/init.d/uhttpd enable >/dev/null 2>&1 || true
     /etc/init.d/uhttpd restart >/dev/null 2>&1 || /etc/init.d/uhttpd start >/dev/null 2>&1 || true
     /usr/bin/v2raya-policy-apply >/tmp/v2raya-policy-boot.log 2>&1 || true

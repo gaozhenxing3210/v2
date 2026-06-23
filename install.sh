@@ -5,6 +5,7 @@ PANEL_USER="${PANEL_USER:-admin}"
 PANEL_PASS="${PANEL_PASS:-weifeng}"
 V2RAYA_USER="${V2RAYA_USER:-admin}"
 V2RAYA_PASS="${V2RAYA_PASS:-weifeng}"
+V2RAYA_API="${V2RAYA_API:-http://127.0.0.1:2017}"
 SET_ROOT_PASSWORD="${SET_ROOT_PASSWORD:-1}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-1}"
 ENABLE_BOOT_START="${ENABLE_BOOT_START:-1}"
@@ -466,6 +467,32 @@ LUA
   rm -f "$tmp_reg" "$tmp_resp"
 }
 
+api_touch_running() {
+  token="$1"
+  [ -n "$token" ] || return 1
+  tmp_touch="/tmp/v2raya-installer-touch.$$"
+  curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" >"$tmp_touch" 2>/dev/null || {
+    rm -f "$tmp_touch"
+    return 1
+  }
+  jsonfilter -q -i "$tmp_touch" -e '@.data.running' 2>/dev/null || true
+  rm -f "$tmp_touch"
+}
+
+api_create_outbound() {
+  token="$1"
+  outbound="$2"
+  [ -n "$token" ] || return 1
+  [ -n "$outbound" ] || return 1
+  tmp_outbound="/tmp/v2raya-installer-outbound.$$"
+  lua - "$outbound" >"$tmp_outbound" <<'LUA'
+local json = require "luci.jsonc"
+print(json.stringify({ outbound = arg[1] or "" }))
+LUA
+  curl -fsS -m 15 -H 'Content-Type: application/json' -H "Authorization: $token" --data-binary @"$tmp_outbound" "$V2RAYA_API/api/outbound" >/dev/null 2>&1 || true
+  rm -f "$tmp_outbound"
+}
+
 disable_service_if_present() {
   svc="$1"
   service_exists "$svc" || return 0
@@ -599,6 +626,30 @@ ensure_v2raya_account() {
 
   token="$(api_login_token || true)"
   [ -n "$token" ]
+}
+
+ensure_v2raya_outbounds() {
+  token="$(api_login_token || true)"
+  [ -n "$token" ] || return 1
+  i=1
+  while [ "$i" -le 20 ]; do
+    api_create_outbound "$token" "$(printf 'dev%02d' "$i")"
+    i=$((i + 1))
+  done
+}
+
+ensure_v2ray_runtime() {
+  token="$(api_login_token || true)"
+  [ -n "$token" ] || return 1
+
+  running="$(api_touch_running "$token" || true)"
+  [ "$running" = "true" ] && return 0
+
+  curl -fsS -m 20 -X POST -H "Authorization: $token" "$V2RAYA_API/api/v2ray" >/tmp/v2raya-api-start.log 2>&1 || true
+  sleep 2
+
+  running="$(api_touch_running "$token" || true)"
+  [ "$running" = "true" ]
 }
 
 optimize_router_runtime() {
@@ -899,6 +950,9 @@ if ! ensure_v2raya_account; then
   echo "error: v2rayA login $V2RAYA_USER / $V2RAYA_PASS is not working after install." >&2
   exit 1
 fi
+
+ensure_v2raya_outbounds || true
+ensure_v2ray_runtime || true
 
 echo "[6/8] applying policy logic"
 /usr/bin/v2raya-policy-apply >/tmp/v2raya-policy-install-apply.log 2>&1 || true
