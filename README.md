@@ -10,8 +10,8 @@
 
 默认账号：
 
-- 本地后台：`admin / admin`
-- v2rayA 后台：如果恢复了随包数据库，一般是 `admin / weifeng`
+- 本地后台：`admin / weifeng`
+- v2rayA 后台：默认是 `admin / weifeng`
 
 ## 最简单安装方式
 

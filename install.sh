@@ -2,7 +2,7 @@
 set -eu
 
 PANEL_USER="${PANEL_USER:-admin}"
-PANEL_PASS="${PANEL_PASS:-admin}"
+PANEL_PASS="${PANEL_PASS:-weifeng}"
 V2RAYA_USER="${V2RAYA_USER:-admin}"
 V2RAYA_PASS="${V2RAYA_PASS:-weifeng}"
 

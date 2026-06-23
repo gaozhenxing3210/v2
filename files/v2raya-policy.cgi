@@ -158,7 +158,7 @@ LUA
 }
 message=""
 WEB_USER="admin"
-WEB_PASS="admin"
+WEB_PASS="weifeng"
 WEB_COOKIE_NAME="v2pol_auth"
 WEB_COOKIE_VALUE="ok"
 login_page(){
