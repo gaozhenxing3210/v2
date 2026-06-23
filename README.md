@@ -15,7 +15,19 @@
 
 ## 最简单安装方式
 
-把本仓库上传到 GitHub 后，在新路由 SSH 里执行：
+当前仓库已经上传到：
+
+```text
+https://github.com/gaozhenxing3210/v2
+```
+
+在新路由 SSH 里直接执行：
+
+```sh
+GITHUB_REPO=gaozhenxing3210/v2 sh -c "$(wget -O- https://raw.githubusercontent.com/gaozhenxing3210/v2/main/bootstrap.sh)"
+```
+
+通用格式是：
 
 ```sh
 GITHUB_REPO=你的GitHub用户名/你的仓库名 sh -c "$(wget -O- https://raw.githubusercontent.com/你的GitHub用户名/你的仓库名/main/bootstrap.sh)"
