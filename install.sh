@@ -9,7 +9,7 @@ SET_ROOT_PASSWORD="${SET_ROOT_PASSWORD:-1}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-1}"
 ENABLE_BOOT_START="${ENABLE_BOOT_START:-1}"
 
-RESTORE_V2RAYA_DB="${RESTORE_V2RAYA_DB:-1}"
+RESTORE_V2RAYA_DB="${RESTORE_V2RAYA_DB:-0}"
 RESTORE_DEVICE_MAP="${RESTORE_DEVICE_MAP:-0}"
 RESTORE_FULL="${RESTORE_FULL:-0}"
 RESET_DEVICE_MAP="${RESET_DEVICE_MAP:-0}"
@@ -457,17 +457,13 @@ ensure_v2raya_running() {
 ensure_uhttpd_8088() {
   [ "$ENABLE_8088_ENTRY" = "1" ] || return 0
 
-  cat >/www/v2raya-policy-index.html <<'EOF'
-<!doctype html>
-<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/v2raya-policy"><title>v2rayA Policy</title><script>location.replace('/cgi-bin/v2raya-policy');</script></head><body>Loading v2rayA policy panel...</body></html>
-EOF
   uci -q del_list uhttpd.main.listen_http='0.0.0.0:8088' || true
   uci -q del_list uhttpd.main.listen_http='[::]:8088' || true
   uci -q delete uhttpd.v2raya_policy_entry || true
   uci set uhttpd.v2raya_policy_entry='uhttpd'
   uci add_list uhttpd.v2raya_policy_entry.listen_http='0.0.0.0:8088'
-  uci set uhttpd.v2raya_policy_entry.home='/www'
-  uci set uhttpd.v2raya_policy_entry.index_page='v2raya-policy-index.html'
+  uci set uhttpd.v2raya_policy_entry.home='/www-v2raya-policy'
+  uci set uhttpd.v2raya_policy_entry.index_page='index.html'
   uci set uhttpd.v2raya_policy_entry.cgi_prefix='/cgi-bin'
   uci set uhttpd.v2raya_policy_entry.script_timeout='60'
   uci set uhttpd.v2raya_policy_entry.network_timeout='30'
@@ -701,7 +697,7 @@ install_packages
 ensure_geo_symlinks
 
 echo "[3/8] installing local panel and policy scripts"
-mkdir -p /www/cgi-bin /usr/libexec /usr/bin /etc/hotplug.d/iface /etc/v2raya
+mkdir -p /www/cgi-bin /www-v2raya-policy/cgi-bin /usr/libexec /usr/bin /etc/hotplug.d/iface /etc/v2raya
 cp files/v2raya-policy.cgi /www/cgi-bin/v2raya-policy
 cp files/v2raya-policy-apply /usr/bin/v2raya-policy-apply
 cp files/v2raya-device-policy /usr/bin/v2raya-device-policy
@@ -715,7 +711,17 @@ cp files/v2raya-devices-html.lua /usr/libexec/v2raya-devices-html.lua
 cp files/v2raya-policy-build.lua /usr/libexec/v2raya-policy-build.lua
 cp files/99-v2raya-device-policy /etc/hotplug.d/iface/99-v2raya-device-policy
 cp files/v2raya-policy.setting.json /etc/v2raya-policy.setting.json
+ln -sf /www/cgi-bin/v2raya-policy /www-v2raya-policy/cgi-bin/v2raya-policy
+cat >/www-v2raya-policy/index.html <<'EOF'
+<!doctype html>
+<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/v2raya-policy"><title>v2rayA Policy</title><script>location.replace('/cgi-bin/v2raya-policy');</script></head><body>Loading v2rayA policy panel...</body></html>
+EOF
+cat >/www-v2raya-policy/cgi-bin/luci <<'EOF'
+#!/bin/sh
+printf 'Status: 302 Found\r\nLocation: /cgi-bin/v2raya-policy\r\nCache-Control: no-store\r\n\r\n'
+EOF
 chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-sync-auth /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy /etc/init.d/v2raya-policy-boot
+chmod +x /www-v2raya-policy/cgi-bin/luci
 
 echo "[4/8] writing auth and device map"
 cat >/etc/v2raya-policy.auth <<EOF

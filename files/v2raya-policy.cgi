@@ -389,7 +389,7 @@ rule_line="$(nft list chain inet v2raya tp_pre 2>/dev/null | grep 'codex-v2raya-
 status="v2rayA: $running"; [ -n "$rule_line" ] && status="$status / policy ok"
 bbr_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)"
 bbr_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown)"
-if [ "$bbr_cc" = "bbr" ]; then bbr_badge="&#32593;&#32476;&#21152;&#36895; BBR &#24050;&#24320;&#21551; / $bbr_qdisc"; else bbr_badge="&#32593;&#32476;&#21152;&#36895; BBR &#26410;&#24320;&#21551; / $bbr_cc"; fi
+if [ "$bbr_cc" = "bbr" ]; then bbr_badge="&#32593;&#32476;&#21152;&#36895; BBR &#24050;&#24320;&#21551; / V:gg88tk"; else bbr_badge="&#32593;&#32476;&#21152;&#36895; BBR &#26410;&#24320;&#21551; / $bbr_cc"; fi
 printf 'Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
 cat <<'HTML'
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>v2rayA &#35774;&#22791;&#20998;&#27969;</title><style>

@@ -6,11 +6,11 @@ BRANCH="${BRANCH:-main}"
 WORK_DIR="${WORK_DIR:-/tmp/v2raya-policy-onekey}"
 KIT_URL="${KIT_URL:-}"
 
-# One-key installs should reproduce the same v2rayA account/nodes DB by default.
+# One-key installs start from a clean v2rayA node list by default.
 # Device MAC/IP bindings stay disabled unless explicitly requested.
 # DNS is hijacked through the router by default, so each client keeps following
 # its current direct/devXX strategy even for UDP/TCP 53 traffic.
-RESTORE_V2RAYA_DB="${RESTORE_V2RAYA_DB:-1}"
+RESTORE_V2RAYA_DB="${RESTORE_V2RAYA_DB:-0}"
 RESTORE_DEVICE_MAP="${RESTORE_DEVICE_MAP:-0}"
 ENABLE_DNS_POLICY="${ENABLE_DNS_POLICY:-1}"
 DNS_HIJACK_PRIMARY="${DNS_HIJACK_PRIMARY:-1.1.1.1}"
