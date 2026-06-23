@@ -50,6 +50,86 @@ end
 print("0")
 LUA
 }
+find_placeholder_ref() {
+  lua - "$1" <<'LUA'
+local json = require "luci.jsonc"
+local f = io.open(arg[1], "r")
+local obj = json.parse(f and f:read("*a") or "{}") or {}
+if f then f:close() end
+local touch = obj.data and obj.data.touch or {}
+for _, s in ipairs(touch.servers or {}) do
+  if tostring(s.address or ""):match("^1%.1%.1%.1") then
+    print("server|" .. tostring(s.id) .. "|0")
+    return
+  end
+end
+LUA
+}
+find_connected_ref() {
+  lua - "$1" "$2" <<'LUA'
+local json = require "luci.jsonc"
+local f = io.open(arg[1], "r")
+local obj = json.parse(f and f:read("*a") or "{}") or {}
+if f then f:close() end
+local outbound = arg[2] or ""
+local touch = obj.data and obj.data.touch or {}
+for _, c in ipairs(touch.connectedServer or {}) do
+  if tostring(c.outbound or "") == outbound then
+    print(tostring(c._type or "server") .. "|" .. tostring(c.id or "") .. "|" .. tostring(c.sub or 0))
+    return
+  end
+end
+LUA
+}
+ensure_placeholder_ref() {
+  local touch_file="$1"
+  local placeholder_ref tmp_ph_link tmp_ph_payload
+  placeholder_ref="$(find_placeholder_ref "$touch_file")"
+  if [ -n "$placeholder_ref" ]; then
+    printf '%s' "$placeholder_ref"
+    return 0
+  fi
+  tmp_ph_link="/tmp/v2raya-placeholder-link.$$"
+  tmp_ph_payload="/tmp/v2raya-placeholder-payload.$$"
+  printf 'socks5://1.1.1.1:1#VIRTUAL-PLACEHOLDER' > "$tmp_ph_link"
+  lua - "$tmp_ph_link" > "$tmp_ph_payload" <<'LUA'
+local json = require "luci.jsonc"
+local f = io.open(arg[1], "r")
+local link = f and (f:read("*a") or "") or ""
+if f then f:close() end
+print(json.stringify({ links = { link } }))
+LUA
+  curl -fsS -m 20 -H 'Content-Type: application/json' -H "Authorization: $token" --data-binary @"$tmp_ph_payload" "$V2RAYA_API/api/link" >/dev/null 2>&1 || true
+  curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$touch_file" 2>/dev/null || echo '{}' > "$touch_file"
+  rm -f "$tmp_ph_link" "$tmp_ph_payload"
+  find_placeholder_ref "$touch_file"
+}
+bind_outbound_ref() {
+  local outbound="$1" id="$2" typ="$3" sub="$4" payload resp code
+  payload="{\"id\":$id,\"_type\":\"$typ\",\"sub\":$sub,\"outbound\":\"$outbound\"}"
+  resp="$(curl -fsS -m 25 -H 'Content-Type: application/json' -H "Authorization: $token" -d "$payload" "$V2RAYA_API/api/connection" || true)"
+  code="$(printf '%s' "$resp" | jsonfilter -q -e '@.code' 2>/dev/null || true)"
+  [ "$code" = "SUCCESS" ]
+}
+sync_unbound_outbounds_to_placeholder() {
+  local touch_file="$1" placeholder_ref ph_typ ph_id ph_sub used_file current_ref outbound
+  placeholder_ref="$(ensure_placeholder_ref "$touch_file")"
+  [ -n "$placeholder_ref" ] || return 0
+  ph_typ="$(echo "$placeholder_ref" | cut -d'|' -f1)"
+  ph_id="$(echo "$placeholder_ref" | cut -d'|' -f2)"
+  ph_sub="$(echo "$placeholder_ref" | cut -d'|' -f3)"
+  used_file="/tmp/v2raya-policy-used-outbounds.$$"
+  awk '!/^#/ && NF>=3 && $3 ~ /^dev[0-9][0-9]$/ {print $3}' "$MAP" 2>/dev/null | sort -u > "$used_file"
+  for n in $(seq -w 1 20); do
+    outbound="dev$n"
+    grep -qx "$outbound" "$used_file" 2>/dev/null && continue
+    current_ref="$(find_connected_ref "$touch_file" "$outbound")"
+    [ "$current_ref" = "$placeholder_ref" ] && continue
+    bind_outbound_ref "$outbound" "$ph_id" "$ph_typ" "$ph_sub" >/dev/null 2>&1 || true
+  done
+  rm -f "$used_file"
+  curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$touch_file" 2>/dev/null || echo '{}' > "$touch_file"
+}
 {
   echo '# v2rayA device allowlist'
   echo '# Managed by /cgi-bin/v2raya-policy.'
@@ -99,6 +179,7 @@ if [ -n "$token" ]; then
   tmp_setting="/tmp/v2raya-apply-setting.$$"
   curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$tmp_touch" 2>/dev/null || echo '{}' > "$tmp_touch"
   curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/setting" > "$tmp_setting" 2>/dev/null || echo '{}' > "$tmp_setting"
+  sync_unbound_outbounds_to_placeholder "$tmp_touch"
   running="$(jsonfilter -q -i "$tmp_touch" -e '@.data.running' 2>/dev/null || echo false)"
   sync_setting="$(setting_needs_sync /etc/v2raya-policy.setting.json "$tmp_setting" 2>/dev/null || echo 1)"
   rm -f "$tmp_touch" "$tmp_setting"
