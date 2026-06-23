@@ -778,7 +778,6 @@ fi
 
 disable_ipv6_runtime
 optimize_router_runtime
-set_root_password_runtime
 set_wifi_password_runtime
 optimize_wifi_runtime
 optimize_thermal_runtime
@@ -848,7 +847,11 @@ echo "[8/8] result"
 echo "Local panel: http://$(lan_ip)/cgi-bin/v2raya-policy"
 echo "Port entry:  http://$(lan_ip):8088/"
 echo "Panel login: $PANEL_USER / $PANEL_PASS"
-echo "Root login:  root / $ROOT_PASSWORD"
+if [ "$SET_ROOT_PASSWORD" = "1" ]; then
+  echo "Root login:  root / $ROOT_PASSWORD"
+else
+  echo "Root login:  unchanged"
+fi
 [ "$ENABLE_88FRP" = "1" ] && echo "Remote SSH:  ssh root@${FRP_SERVER_ADDR} -p ${FRP_REMOTE_PORT}"
 [ "$ENABLE_88FRP" = "1" ] && [ "$FRP_LOCAL_PORT" = "8088" ] && echo "Remote panel: http://${FRP_SERVER_ADDR}:${FRP_REMOTE_PORT}"
 echo "v2rayA Web: http://$(lan_ip):2017/"
@@ -859,4 +862,8 @@ echo "Root password policy: SET_ROOT_PASSWORD=$SET_ROOT_PASSWORD"
 echo "Boot start: ENABLE_BOOT_START=$ENABLE_BOOT_START"
 echo "Router tuning: OPTIMIZE_ROUTER=$OPTIMIZE_ROUTER, OPTIMIZE_WIFI=$OPTIMIZE_WIFI, LEAN_SERVICES=$LEAN_SERVICES, ENABLE_BBR=$ENABLE_BBR"
 echo
+
+# Keep root-password changes as the very last step so an SSH reconnect does not
+# interrupt package install, service start, or policy provisioning.
+set_root_password_runtime || true
 echo "This installer does not change the LAN IP or netmask."
