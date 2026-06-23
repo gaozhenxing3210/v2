@@ -5,8 +5,11 @@ PANEL_USER="${PANEL_USER:-admin}"
 PANEL_PASS="${PANEL_PASS:-weifeng}"
 V2RAYA_USER="${V2RAYA_USER:-admin}"
 V2RAYA_PASS="${V2RAYA_PASS:-weifeng}"
+SET_ROOT_PASSWORD="${SET_ROOT_PASSWORD:-1}"
+ROOT_PASSWORD="${ROOT_PASSWORD:-1}"
+ENABLE_BOOT_START="${ENABLE_BOOT_START:-1}"
 
-RESTORE_V2RAYA_DB="${RESTORE_V2RAYA_DB:-0}"
+RESTORE_V2RAYA_DB="${RESTORE_V2RAYA_DB:-1}"
 RESTORE_DEVICE_MAP="${RESTORE_DEVICE_MAP:-0}"
 RESTORE_FULL="${RESTORE_FULL:-0}"
 RESET_DEVICE_MAP="${RESET_DEVICE_MAP:-0}"
@@ -343,11 +346,183 @@ service_exists() {
   [ -x "/etc/init.d/$1" ]
 }
 
+port_listening() {
+  port="$1"
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" { found=1 } END { exit(found ? 0 : 1) }'
+    return $?
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" { found=1 } END { exit(found ? 0 : 1) }'
+    return $?
+  fi
+  return 1
+}
+
+api_login_token() {
+  [ -n "${V2RAYA_USER:-}" ] || return 1
+  [ -n "${V2RAYA_PASS:-}" ] || return 1
+  tmp_login="/tmp/v2raya-installer-login.$$"
+  tmp_resp="/tmp/v2raya-installer-login-resp.$$"
+  lua - "$V2RAYA_USER" "$V2RAYA_PASS" >"$tmp_login" <<'LUA'
+local json = require "luci.jsonc"
+print(json.stringify({ username = arg[1] or "", password = arg[2] or "" }))
+LUA
+  curl -fsS -m 10 -H 'Content-Type: application/json' --data-binary @"$tmp_login" http://127.0.0.1:2017/api/login >"$tmp_resp" 2>/dev/null || {
+    rm -f "$tmp_login" "$tmp_resp"
+    return 1
+  }
+  jsonfilter -q -i "$tmp_resp" -e '@.data.token' 2>/dev/null || true
+  rm -f "$tmp_login" "$tmp_resp"
+}
+
+api_register_token() {
+  [ -n "${V2RAYA_USER:-}" ] || return 1
+  [ -n "${V2RAYA_PASS:-}" ] || return 1
+  tmp_reg="/tmp/v2raya-installer-register.$$"
+  tmp_resp="/tmp/v2raya-installer-register-resp.$$"
+  lua - "$V2RAYA_USER" "$V2RAYA_PASS" >"$tmp_reg" <<'LUA'
+local json = require "luci.jsonc"
+print(json.stringify({ username = arg[1] or "", password = arg[2] or "" }))
+LUA
+  curl -fsS -m 10 -X POST -H 'Content-Type: application/json' --data-binary @"$tmp_reg" http://127.0.0.1:2017/api/account >"$tmp_resp" 2>/dev/null || {
+    rm -f "$tmp_reg" "$tmp_resp"
+    return 1
+  }
+  jsonfilter -q -i "$tmp_resp" -e '@.data.token' 2>/dev/null || true
+  rm -f "$tmp_reg" "$tmp_resp"
+}
+
 disable_service_if_present() {
   svc="$1"
   service_exists "$svc" || return 0
   /etc/init.d/"$svc" stop >/dev/null 2>&1 || true
   /etc/init.d/"$svc" disable >/dev/null 2>&1 || true
+}
+
+set_root_password_runtime() {
+  [ "$SET_ROOT_PASSWORD" = "1" ] || return 0
+  if command -v chpasswd >/dev/null 2>&1; then
+    printf 'root:%s\n' "$ROOT_PASSWORD" | chpasswd
+    return $?
+  fi
+  printf '%s\n%s\n' "$ROOT_PASSWORD" "$ROOT_PASSWORD" | passwd root >/dev/null 2>&1
+}
+
+ensure_v2raya_running() {
+  service_exists v2raya || {
+    echo "warning: /etc/init.d/v2raya not found; v2rayA package may not be installed." >&2
+    return 1
+  }
+
+  uci set v2raya.config.enabled='1' 2>/dev/null || true
+  uci commit v2raya 2>/dev/null || true
+  /etc/init.d/v2raya enable >/dev/null 2>&1 || true
+
+  log_file="/tmp/v2raya-install-start.log"
+  : >"$log_file"
+
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    echo "[v2rayA start attempt $attempt]" >>"$log_file"
+    /etc/init.d/v2raya restart >>"$log_file" 2>&1 || /etc/init.d/v2raya start >>"$log_file" 2>&1 || true
+    sleep 2
+    if /etc/init.d/v2raya status >/dev/null 2>&1 && port_listening 2017; then
+      echo "v2rayA started successfully on attempt $attempt" >>"$log_file"
+      return 0
+    fi
+    /etc/init.d/v2raya status >>"$log_file" 2>&1 || true
+    logread 2>/dev/null | tail -n 80 | grep -i v2raya >>"$log_file" 2>&1 || true
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+
+  echo "v2rayA failed to reach running+listening state after retries." >>"$log_file"
+  return 1
+}
+
+ensure_uhttpd_8088() {
+  [ "$ENABLE_8088_ENTRY" = "1" ] || return 0
+
+  cat >/www/v2raya-policy-index.html <<'EOF'
+<!doctype html>
+<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/v2raya-policy"><title>v2rayA Policy</title><script>location.replace('/cgi-bin/v2raya-policy');</script></head><body>Loading v2rayA policy panel...</body></html>
+EOF
+  uci -q del_list uhttpd.main.listen_http='0.0.0.0:8088' || true
+  uci -q del_list uhttpd.main.listen_http='[::]:8088' || true
+  uci -q delete uhttpd.v2raya_policy_entry || true
+  uci set uhttpd.v2raya_policy_entry='uhttpd'
+  uci add_list uhttpd.v2raya_policy_entry.listen_http='0.0.0.0:8088'
+  uci set uhttpd.v2raya_policy_entry.home='/www'
+  uci set uhttpd.v2raya_policy_entry.index_page='v2raya-policy-index.html'
+  uci set uhttpd.v2raya_policy_entry.cgi_prefix='/cgi-bin'
+  uci set uhttpd.v2raya_policy_entry.script_timeout='60'
+  uci set uhttpd.v2raya_policy_entry.network_timeout='30'
+  uci set uhttpd.v2raya_policy_entry.http_keepalive='20'
+  uci set uhttpd.v2raya_policy_entry.tcp_keepalive='1'
+  uci commit uhttpd 2>/dev/null || true
+
+  /etc/init.d/uhttpd enable >/dev/null 2>&1 || true
+  /etc/init.d/uhttpd restart >/dev/null 2>&1 || /etc/init.d/uhttpd start >/dev/null 2>&1 || true
+  sleep 2
+
+  port_listening 8088
+}
+
+verify_wifi_password() {
+  [ "$SET_WIFI_PASSWORD" = "1" ] || return 0
+  uci show wireless >/dev/null 2>&1 || return 0
+
+  for section in $(uci show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do
+    mode="$(uci -q get wireless.$section.mode 2>/dev/null || true)"
+    [ -n "$mode" ] || mode='ap'
+    [ "$mode" = "ap" ] || continue
+    key="$(uci -q get wireless.$section.key || true)"
+    enc="$(uci -q get wireless.$section.encryption || true)"
+    disabled="$(uci -q get wireless.$section.disabled || true)"
+    [ "$key" = "$WIFI_PASSWORD" ] || return 1
+    [ "$disabled" != "1" ] || return 1
+    [ -n "$enc" ] || return 1
+  done
+  return 0
+}
+
+flush_ipv6_runtime() {
+  for dev in $(ls /proc/sys/net/ipv6/conf 2>/dev/null | grep -v '^all$' | grep -v '^default$' || true); do
+    sysctl -w "net.ipv6.conf.$dev.disable_ipv6=1" >/dev/null 2>&1 || true
+    ip -6 addr flush dev "$dev" >/dev/null 2>&1 || true
+  done
+  ifdown wan6 >/dev/null 2>&1 || true
+}
+
+verify_ipv6_disabled() {
+  [ "$DISABLE_IPV6" = "1" ] || return 0
+
+  [ -z "$(uci -q get network.wan6.proto || true)" ] || return 1
+  [ "$(uci -q get network.lan.delegate || true)" = "0" ] || return 1
+  [ "$(uci -q get network.lan.ip6assign || true)" = "0" ] || return 1
+  [ "$(uci -q get dhcp.lan.ra || true)" = "disabled" ] || return 1
+  [ "$(uci -q get dhcp.lan.dhcpv6 || true)" = "disabled" ] || return 1
+  [ "$(uci -q get dhcp.lan.ndp || true)" = "disabled" ] || return 1
+  [ "$(uci -q get dhcp.lan.ra_management || true)" = "0" ] || return 1
+  service_exists odhcpd && [ -L /etc/rc.d/S95odhcpd ] && return 1
+  return 0
+}
+
+verify_v2raya_login() {
+  token="$(api_login_token || true)"
+  [ -n "$token" ]
+}
+
+ensure_v2raya_account() {
+  token="$(api_login_token || true)"
+  [ -n "$token" ] && return 0
+
+  token="$(api_register_token || true)"
+  [ -n "$token" ] && return 0
+
+  token="$(api_login_token || true)"
+  [ -n "$token" ]
 }
 
 optimize_router_runtime() {
@@ -407,6 +582,7 @@ EOF
   uci commit dhcp 2>/dev/null || true
 
   disable_service_if_present odhcpd
+  flush_ipv6_runtime
 }
 
 optimize_wifi_runtime() {
@@ -414,9 +590,10 @@ optimize_wifi_runtime() {
   uci show wireless >/dev/null 2>&1 || return 0
 
   for section in $(uci show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-device$/\1/p"); do
-    band="$(uci -q get wireless.$section.band)"
-    hwmode="$(uci -q get wireless.$section.hwmode)"
-    [ -n "$(uci -q get wireless.$section.country)" ] || uci -q set wireless.$section.country='CN'
+    band="$(uci -q get wireless.$section.band 2>/dev/null || true)"
+    hwmode="$(uci -q get wireless.$section.hwmode 2>/dev/null || true)"
+    country="$(uci -q get wireless.$section.country 2>/dev/null || true)"
+    [ -n "$country" ] || uci -q set wireless.$section.country='CN'
     uci -q set wireless.$section.channel='auto'
     uci -q set wireless.$section.cell_density='0'
     case "$band:$hwmode" in
@@ -443,7 +620,7 @@ set_wifi_password_runtime() {
   uci show wireless >/dev/null 2>&1 || return 0
 
   for section in $(uci show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do
-    mode="$(uci -q get wireless.$section.mode)"
+    mode="$(uci -q get wireless.$section.mode 2>/dev/null || true)"
     [ -n "$mode" ] || mode='ap'
     [ "$mode" = "ap" ] || continue
     uci -q set wireless.$section.disabled='0'
@@ -489,6 +666,8 @@ for f in \
   files/v2raya-policy-apply \
   files/v2raya-device-policy \
   files/v2raya-dns-policy \
+  files/v2raya-sync-auth \
+  files/v2raya-policy-boot \
   files/v2raya-bind \
   files/v2raya-import-lines \
   files/v2raya-bind-html.lua \
@@ -510,6 +689,8 @@ cp files/v2raya-policy.cgi /www/cgi-bin/v2raya-policy
 cp files/v2raya-policy-apply /usr/bin/v2raya-policy-apply
 cp files/v2raya-device-policy /usr/bin/v2raya-device-policy
 cp files/v2raya-dns-policy /usr/bin/v2raya-dns-policy
+cp files/v2raya-sync-auth /usr/bin/v2raya-sync-auth
+cp files/v2raya-policy-boot /etc/init.d/v2raya-policy-boot
 cp files/v2raya-bind /usr/bin/v2raya-bind
 cp files/v2raya-import-lines /usr/bin/v2raya-import-lines
 cp files/v2raya-bind-html.lua /usr/libexec/v2raya-bind-html.lua
@@ -517,7 +698,7 @@ cp files/v2raya-devices-html.lua /usr/libexec/v2raya-devices-html.lua
 cp files/v2raya-policy-build.lua /usr/libexec/v2raya-policy-build.lua
 cp files/99-v2raya-device-policy /etc/hotplug.d/iface/99-v2raya-device-policy
 cp files/v2raya-policy.setting.json /etc/v2raya-policy.setting.json
-chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy
+chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-sync-auth /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy /etc/init.d/v2raya-policy-boot
 
 echo "[4/8] writing auth and device map"
 cat >/etc/v2raya-policy.auth <<EOF
@@ -529,6 +710,8 @@ DNS_HIJACK_PRIMARY="$DNS_HIJACK_PRIMARY"
 DNS_HIJACK_SECONDARY="$DNS_HIJACK_SECONDARY"
 EOF
 
+/usr/bin/v2raya-sync-auth "$V2RAYA_USER" "$V2RAYA_PASS" "$PANEL_USER" "$PANEL_PASS" >/dev/null 2>&1 || true
+
 if [ "$RESET_DEVICE_MAP" = "1" ]; then
   cat >/etc/v2raya-policy.map <<'EOF'
 # mac ip outbound label
@@ -539,10 +722,6 @@ elif [ ! -f /etc/v2raya-policy.map ]; then
   cat >/etc/v2raya-policy.map <<'EOF'
 # mac ip outbound label
 EOF
-fi
-
-if [ "$PANEL_USER" != "admin" ] || [ "$PANEL_PASS" != "admin" ]; then
-  sed -i "s/^WEB_USER=.*/WEB_USER=\"$PANEL_USER\"/; s/^WEB_PASS=.*/WEB_PASS=\"$PANEL_PASS\"/" /www/cgi-bin/v2raya-policy
 fi
 
 echo "[5/8] configuring v2rayA, BBR, and 8088 entry"
@@ -567,32 +746,21 @@ fi
 
 disable_ipv6_runtime
 optimize_router_runtime
+set_root_password_runtime
 set_wifi_password_runtime
 optimize_wifi_runtime
 optimize_thermal_runtime
 lean_services_runtime
 install_frpc_runtime
 
-if [ "$ENABLE_8088_ENTRY" = "1" ]; then
-  cat >/www/v2raya-policy-index.html <<'EOF'
-<!doctype html>
-<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/v2raya-policy"><title>v2rayA Policy</title><script>location.replace('/cgi-bin/v2raya-policy');</script></head><body>Loading v2rayA policy panel...</body></html>
-EOF
-  uci -q del_list uhttpd.main.listen_http='0.0.0.0:8088' || true
-  uci -q del_list uhttpd.main.listen_http='[::]:8088' || true
-  uci -q delete uhttpd.v2raya_policy_entry || true
-  uci set uhttpd.v2raya_policy_entry='uhttpd'
-  uci add_list uhttpd.v2raya_policy_entry.listen_http='0.0.0.0:8088'
-  uci set uhttpd.v2raya_policy_entry.home='/www'
-  uci set uhttpd.v2raya_policy_entry.index_page='v2raya-policy-index.html'
-  uci set uhttpd.v2raya_policy_entry.cgi_prefix='/cgi-bin'
-  uci set uhttpd.v2raya_policy_entry.script_timeout='60'
-  uci set uhttpd.v2raya_policy_entry.network_timeout='30'
-  uci set uhttpd.v2raya_policy_entry.http_keepalive='20'
-  uci set uhttpd.v2raya_policy_entry.tcp_keepalive='1'
-  uci commit uhttpd 2>/dev/null || true
-  /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+if [ "$ENABLE_BOOT_START" = "1" ]; then
+  /etc/init.d/v2raya-policy-boot enable >/dev/null 2>&1 || true
 fi
+
+ensure_uhttpd_8088 || {
+  echo "error: 8088 local panel failed to start." >&2
+  exit 1
+}
 
 if [ "$RESTORE_V2RAYA_DB" = "1" ]; then
   echo "[optional] restoring v2rayA database"
@@ -602,12 +770,36 @@ if [ "$RESTORE_V2RAYA_DB" = "1" ]; then
   chmod 600 /etc/v2raya/bolt.db /etc/v2raya/boltv4.db 2>/dev/null || true
 fi
 
-/etc/init.d/v2raya enable >/dev/null 2>&1 || true
-/etc/init.d/v2raya restart >/dev/null 2>&1 || /etc/init.d/v2raya start >/dev/null 2>&1 || true
+ensure_v2raya_running || {
+  echo "error: v2rayA failed to start automatically. See /tmp/v2raya-install-start.log" >&2
+  exit 1
+}
 /etc/init.d/firewall restart >/dev/null 2>&1 || true
 /etc/init.d/network reload >/dev/null 2>&1 || true
 /sbin/wifi reload >/dev/null 2>&1 || wifi reload >/dev/null 2>&1 || true
 sleep 3
+
+if ! /etc/init.d/v2raya status >/dev/null 2>&1 || ! port_listening 2017; then
+  ensure_v2raya_running || {
+    echo "error: v2rayA stopped after firewall/network reload. See /tmp/v2raya-install-start.log" >&2
+    exit 1
+  }
+fi
+
+if ! verify_wifi_password; then
+  echo "error: Wi-Fi password settings were not applied as expected." >&2
+  exit 1
+fi
+
+if ! verify_ipv6_disabled; then
+  echo "error: IPv6 disable settings were not fully applied." >&2
+  exit 1
+fi
+
+if ! ensure_v2raya_account; then
+  echo "error: v2rayA login $V2RAYA_USER / $V2RAYA_PASS is not working after install." >&2
+  exit 1
+fi
 
 echo "[6/8] applying policy logic"
 /usr/bin/v2raya-policy-apply >/tmp/v2raya-policy-install-apply.log 2>&1 || true
@@ -624,14 +816,15 @@ echo "[8/8] result"
 echo "Local panel: http://$(lan_ip)/cgi-bin/v2raya-policy"
 echo "Port entry:  http://$(lan_ip):8088/"
 echo "Panel login: $PANEL_USER / $PANEL_PASS"
+echo "Root login:  root / $ROOT_PASSWORD"
 [ "$ENABLE_88FRP" = "1" ] && echo "Remote SSH:  ssh root@${FRP_SERVER_ADDR} -p ${FRP_REMOTE_PORT}"
 [ "$ENABLE_88FRP" = "1" ] && [ "$FRP_LOCAL_PORT" = "8088" ] && echo "Remote panel: http://${FRP_SERVER_ADDR}:${FRP_REMOTE_PORT}"
 echo "v2rayA Web: http://$(lan_ip):2017/"
 echo "Device map restore: RESTORE_DEVICE_MAP=$RESTORE_DEVICE_MAP, RESET_DEVICE_MAP=$RESET_DEVICE_MAP"
 echo "v2rayA DB restore: RESTORE_V2RAYA_DB=$RESTORE_V2RAYA_DB"
 echo "DNS policy: ENABLE_DNS_POLICY=$ENABLE_DNS_POLICY, upstream=$DNS_HIJACK_PRIMARY,$DNS_HIJACK_SECONDARY"
+echo "Root password policy: SET_ROOT_PASSWORD=$SET_ROOT_PASSWORD"
+echo "Boot start: ENABLE_BOOT_START=$ENABLE_BOOT_START"
 echo "Router tuning: OPTIMIZE_ROUTER=$OPTIMIZE_ROUTER, OPTIMIZE_WIFI=$OPTIMIZE_WIFI, LEAN_SERVICES=$LEAN_SERVICES, ENABLE_BBR=$ENABLE_BBR"
 echo
 echo "This installer does not change the LAN IP or netmask."
-echo "If v2rayA login failed during apply, open v2rayA Web once and create/login the admin account,"
-echo "then edit /etc/v2raya-policy.auth and rerun: /usr/bin/v2raya-policy-apply"

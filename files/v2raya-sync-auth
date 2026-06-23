@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+
+AUTH="/etc/v2raya-policy.auth"
+CGI="/www/cgi-bin/v2raya-policy"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  v2raya-sync-auth <v2raya_user> <v2raya_pass> [panel_user] [panel_pass]
+
+Examples:
+  v2raya-sync-auth admin weifeng
+  v2raya-sync-auth myuser mypass mypanel mypanelpass
+
+If panel_user/panel_pass are omitted, the 8088 panel login will follow the
+same username/password as v2rayA.
+EOF
+}
+
+[ "${1:-}" = "-h" ] && { usage; exit 0; }
+[ "${1:-}" = "--help" ] && { usage; exit 0; }
+
+[ $# -ge 2 ] || {
+  usage >&2
+  exit 1
+}
+
+V2_USER="$1"
+V2_PASS="$2"
+PANEL_USER="${3:-$V2_USER}"
+PANEL_PASS="${4:-$V2_PASS}"
+
+if [ ! -f "$AUTH" ]; then
+  cat >"$AUTH" <<EOF
+V2RAYA_API="http://127.0.0.1:2017"
+V2RAYA_USER="$V2_USER"
+V2RAYA_PASS="$V2_PASS"
+ENABLE_DNS_POLICY="1"
+DNS_HIJACK_PRIMARY="1.1.1.1"
+DNS_HIJACK_SECONDARY="8.8.8.8"
+EOF
+else
+  sed -i \
+    -e "s#^V2RAYA_USER=.*#V2RAYA_USER=\"$V2_USER\"#" \
+    -e "s#^V2RAYA_PASS=.*#V2RAYA_PASS=\"$V2_PASS\"#" \
+    "$AUTH"
+  grep -q '^V2RAYA_API=' "$AUTH" || sed -i '1i V2RAYA_API="http://127.0.0.1:2017"' "$AUTH"
+fi
+
+if [ -f "$CGI" ]; then
+  sed -i \
+    -e "s#^WEB_USER=.*#WEB_USER=\"$PANEL_USER\"#" \
+    -e "s#^WEB_PASS=.*#WEB_PASS=\"$PANEL_PASS\"#" \
+    "$CGI"
+fi
+
+echo "Synced credentials:"
+echo "  v2rayA API: $V2_USER / $V2_PASS"
+echo "  8088 panel: $PANEL_USER / $PANEL_PASS"

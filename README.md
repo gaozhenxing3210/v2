@@ -12,6 +12,15 @@
 
 - 本地后台：`admin / weifeng`
 - v2rayA 后台：默认是 `admin / weifeng`
+- SSH 管理：`root / 1`
+
+如果你后面手动改了 `2017` 的账号密码，可以直接在路由器里执行：
+
+```sh
+v2raya-sync-auth 新账号 新密码
+```
+
+这样 `8088` 后台会一起跟着改，不会再出现“2017 改了，8088 还在用旧密码”的情况。
 
 ## 最简单安装方式
 
@@ -40,6 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/gaozhenxing3210/v2/main/onekey.sh |
 - 恢复随包的 v2rayA 数据库：`RESTORE_V2RAYA_DB=1`
 - 不恢复旧设备 MAC/IP 绑定：`RESTORE_DEVICE_MAP=0`
 - 不修改 LAN IP 和网段
+- 默认会把 `root` 密码设为 `1`
 
 如果不想恢复 v2rayA 数据库，用：
 
