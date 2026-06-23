@@ -215,16 +215,16 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
       if valid_mac "$mac" && valid_ip "$ip" && [ "$outbound" = "wan" ]; then
         prev_outbound="$(map_outbound "$mac")"
         remove_map "$mac"
+        "$APPLY" >/dev/null 2>&1
         if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then
           restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true
         fi
-        "$APPLY" >/dev/null 2>&1
         message="&#24050;&#35774;&#32622; $mac &#36208;&#26412;&#22320;"
       elif valid_mac "$mac" && valid_ip "$ip" && valid_outbound "$outbound"; then upsert_map "$mac" "$ip" "$outbound" "${label:-device}"; "$APPLY" >/dev/null 2>&1; message="&#24050;&#35774;&#32622; $mac -> $outbound"; else message="MAC/IP/&#20986;&#21475;&#26684;&#24335;&#19981;&#23545;"; fi ;;
     wan)
-      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then prev_outbound="$(map_outbound "$mac")"; remove_map "$mac"; if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true; fi; "$APPLY" >/dev/null 2>&1; message="&#24050;&#35774;&#32622; $mac &#36208;&#26412;&#22320;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
+      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then prev_outbound="$(map_outbound "$mac")"; remove_map "$mac"; "$APPLY" >/dev/null 2>&1; if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true; fi; message="&#24050;&#35774;&#32622; $mac &#36208;&#26412;&#22320;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
     unbind_map)
-      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then prev_outbound="$(map_outbound "$mac")"; remove_map "$mac"; if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true; fi; "$APPLY" >/dev/null 2>&1; message="&#24050;&#21462;&#28040;&#35774;&#22791;&#32465;&#23450;&#65292;$mac &#24050;&#24674;&#22797;&#33258;&#30001;&#19978;&#32593; / &#20027;&#32593;&#32476;&#30452;&#36830;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
+      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then prev_outbound="$(map_outbound "$mac")"; remove_map "$mac"; "$APPLY" >/dev/null 2>&1; if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true; fi; message="&#24050;&#21462;&#28040;&#35774;&#22791;&#32465;&#23450;&#65292;$mac &#24050;&#24674;&#22797;&#33258;&#30001;&#19978;&#32593; / &#20027;&#32593;&#32476;&#30452;&#36830;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
     apply)
       "$APPLY" >/dev/null 2>&1; message="&#24050;&#37325;&#26032;&#24212;&#29992;&#35268;&#21017;" ;;
     bindout)
