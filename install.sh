@@ -716,8 +716,18 @@ cat >/www-v2raya-policy/index.html <<'EOF'
 <!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/v2raya-policy"><title>v2rayA Policy</title><script>location.replace('/cgi-bin/v2raya-policy');</script></head><body>Loading v2rayA policy panel...</body></html>
 EOF
+cat >/www-v2raya-policy/cgi-bin/luci <<'EOF'
+#!/bin/sh
+uri="${REQUEST_URI%%\?*}"
+[ -n "$uri" ] || uri="/cgi-bin/luci/"
+if [ "$uri" = "/cgi-bin/luci" ] || [ "$uri" = "/cgi-bin/luci/" ]; then
+  printf 'Status: 302 Found\r\nLocation: /cgi-bin/v2raya-policy\r\nCache-Control: no-store\r\n\r\n'
+else
+  printf 'Status: 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n\r\nNot Found\n'
+fi
+EOF
 chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-sync-auth /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy /etc/init.d/v2raya-policy-boot
-rm -f /www-v2raya-policy/cgi-bin/luci
+chmod +x /www-v2raya-policy/cgi-bin/luci
 
 echo "[4/8] writing auth and device map"
 cat >/etc/v2raya-policy.auth <<EOF
