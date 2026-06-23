@@ -132,7 +132,7 @@ install_packages() {
       install_local_ipks || true
     fi
 
-    base_pkgs="v2raya luci-app-v2raya luci-i18n-v2raya-zh-cn xray-core v2ray-geoip v2ray-geosite curl jsonfilter lua luci-lib-jsonc kmod-nft-tproxy kmod-nft-socket kmod-tcp-bbr"
+    base_pkgs="v2raya luci-app-v2raya luci-i18n-v2raya-zh-cn xray-core v2ray-geoip v2ray-geosite curl jsonfilter lua luci-lib-jsonc kmod-nft-tproxy kmod-nft-socket iptables-mod-tproxy iptables-mod-socket kmod-tcp-bbr"
     [ "$INSTALL_DNSMASQ_FULL" = "1" ] && base_pkgs="$base_pkgs dnsmasq-full"
     # shellcheck disable=SC2086
     install_opkg_packages $base_pkgs || true
@@ -251,6 +251,7 @@ for f in \
   files/v2raya-policy.cgi \
   files/v2raya-policy-apply \
   files/v2raya-device-policy \
+  files/v2raya-dns-policy \
   files/v2raya-bind \
   files/v2raya-import-lines \
   files/v2raya-bind-html.lua \
@@ -271,6 +272,7 @@ mkdir -p /www/cgi-bin /usr/libexec /usr/bin /etc/hotplug.d/iface /etc/v2raya
 cp files/v2raya-policy.cgi /www/cgi-bin/v2raya-policy
 cp files/v2raya-policy-apply /usr/bin/v2raya-policy-apply
 cp files/v2raya-device-policy /usr/bin/v2raya-device-policy
+cp files/v2raya-dns-policy /usr/bin/v2raya-dns-policy
 cp files/v2raya-bind /usr/bin/v2raya-bind
 cp files/v2raya-import-lines /usr/bin/v2raya-import-lines
 cp files/v2raya-bind-html.lua /usr/libexec/v2raya-bind-html.lua
@@ -278,7 +280,7 @@ cp files/v2raya-devices-html.lua /usr/libexec/v2raya-devices-html.lua
 cp files/v2raya-policy-build.lua /usr/libexec/v2raya-policy-build.lua
 cp files/99-v2raya-device-policy /etc/hotplug.d/iface/99-v2raya-device-policy
 cp files/v2raya-policy.setting.json /etc/v2raya-policy.setting.json
-chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy
+chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy
 
 echo "[4/8] writing auth and device map"
 cat >/etc/v2raya-policy.auth <<EOF
@@ -366,6 +368,7 @@ sleep 3
 echo "[6/8] applying policy logic"
 /usr/bin/v2raya-policy-apply >/tmp/v2raya-policy-install-apply.log 2>&1 || true
 /usr/bin/v2raya-device-policy >/tmp/v2raya-policy-install-device.log 2>&1 || true
+/usr/bin/v2raya-dns-policy >/tmp/v2raya-policy-install-dns.log 2>&1 || true
 
 echo "[7/8] verifying"
 echo "LAN IP: $(lan_ip)"

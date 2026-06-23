@@ -5,6 +5,8 @@ AUTH="/etc/v2raya-policy.auth"
 : "${V2RAYA_API:=http://127.0.0.1:2017}"
 : "${V2RAYA_USER:=admin}"
 : "${V2RAYA_PASS:=weifeng}"
+: "${DNS_HIJACK_PRIMARY:=1.1.1.1}"
+: "${DNS_HIJACK_SECONDARY:=8.8.8.8}"
 MAP="/etc/v2raya-policy.map"
 /usr/libexec/v2raya-policy-build.lua
 ALLOW_MACS="$(cat /tmp/v2raya-policy.allow-macs 2>/dev/null || true)"
@@ -38,6 +40,15 @@ LUA
   printf 'ALLOW_MACS="%s"\n' "$ALLOW_MACS"
 } > /etc/v2raya-device-policy.conf
 chmod 644 /etc/v2raya-device-policy.conf
+{
+  echo '# v2rayA dns policy'
+  echo '# Managed by /cgi-bin/v2raya-policy.'
+  echo 'ENABLE_DNS_POLICY="1"'
+  echo 'LAN_IF="br-lan"'
+  printf 'DNS_HIJACK_PRIMARY="%s"\n' "$DNS_HIJACK_PRIMARY"
+  printf 'DNS_HIJACK_SECONDARY="%s"\n' "$DNS_HIJACK_SECONDARY"
+} > /etc/v2raya-dns-policy.conf
+chmod 644 /etc/v2raya-dns-policy.conf
 if [ -s "$MAP" ]; then
   awk '!/^#/ && NF>=3 {print $1, $2}' "$MAP" | while read mac ip; do
     case "$mac" in ''|*[!0-9a-fA-F:]*) continue ;; esac
@@ -79,3 +90,4 @@ if [ -n "$token" ]; then
   fi
 fi
 /usr/bin/v2raya-device-policy >/dev/null 2>&1 || true
+/usr/bin/v2raya-dns-policy >/dev/null 2>&1 || true

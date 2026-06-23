@@ -2,5 +2,6 @@
 case "$ACTION" in
     ifup|ifupdate|ifdown)
         /usr/bin/v2raya-device-policy >/dev/null 2>&1
+        /usr/bin/v2raya-dns-policy >/dev/null 2>&1
     ;;
 esac
