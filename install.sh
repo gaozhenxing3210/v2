@@ -90,6 +90,31 @@ install_local_ipks() {
   return 0
 }
 
+install_local_ipks_by_pattern() {
+  pattern="$1"
+  [ -d ipks ] || return 1
+  ipk_files="$(find ipks -type f -name "$pattern" 2>/dev/null | sort || true)"
+  [ -n "$ipk_files" ] || return 1
+  echo "Installing bundled IPK files matching $pattern ..."
+  # shellcheck disable=SC2086
+  opkg install $ipk_files || true
+  return 0
+}
+
+install_local_data_ipks() {
+  install_local_ipks_by_pattern 'v2ray-geo*.ipk'
+}
+
+install_local_v2raya_ipks() {
+  [ -d ipks ] || return 1
+  ipk_files="$(find ipks -type f \( -name 'v2raya_*.ipk' -o -name 'luci-app-v2raya_*.ipk' -o -name 'luci-i18n-v2raya-zh-cn_*.ipk' \) 2>/dev/null | sort || true)"
+  [ -n "$ipk_files" ] || return 1
+  echo "Installing bundled v2rayA IPK files ..."
+  # shellcheck disable=SC2086
+  opkg install $ipk_files || true
+  return 0
+}
+
 install_opkg_packages() {
   command -v opkg >/dev/null 2>&1 || return 1
   opkg_update_once
@@ -98,6 +123,12 @@ install_opkg_packages() {
     opkg list-installed "$pkg" 2>/dev/null | grep -q "^$pkg " && continue
     run_timeout 120 opkg install "$pkg" || echo "warning: opkg install failed: $pkg" >&2
   done
+}
+
+opkg_has_pkg() {
+  command -v opkg >/dev/null 2>&1 || return 1
+  pkg="$1"
+  opkg list "$pkg" 2>/dev/null | grep -q "^$pkg - "
 }
 
 install_apk_packages() {
@@ -167,17 +198,46 @@ install_packages() {
   [ "$INSTALL_V2RAYA" = "1" ] || return 0
 
   if command -v opkg >/dev/null 2>&1; then
-    if [ "$INSTALL_OFFLINE_IPKS" = "1" ] || [ "$INSTALL_OFFLINE_IPKS" = "auto" ]; then
-      install_local_ipks || true
-    fi
+    opkg_update_once
 
-    base_pkgs="v2raya luci-app-v2raya luci-i18n-v2raya-zh-cn xray-core v2ray-geoip v2ray-geosite curl jsonfilter lua luci-lib-jsonc kmod-nft-tproxy kmod-nft-socket iptables-mod-tproxy iptables-mod-socket kmod-tcp-bbr"
+    base_pkgs="curl jsonfilter lua luci-lib-jsonc kmod-tcp-bbr"
     [ "$INSTALL_DNSMASQ_FULL" = "1" ] && base_pkgs="$base_pkgs dnsmasq-full"
     # shellcheck disable=SC2086
     install_opkg_packages $base_pkgs || true
 
-    if ! command -v v2raya >/dev/null 2>&1 && [ "$INSTALL_OFFLINE_IPKS" != "0" ]; then
+    if [ "$INSTALL_OFFLINE_IPKS" = "1" ]; then
       install_local_ipks || true
+    else
+      install_local_data_ipks || install_opkg_packages v2ray-geoip v2ray-geosite || true
+    fi
+
+    v2raya_repo_ok=0
+    if opkg_has_pkg v2raya && opkg_has_pkg xray-core; then
+      v2raya_repo_ok=1
+    fi
+
+    if [ "$v2raya_repo_ok" = "1" ]; then
+      repo_pkgs="xray-core v2raya"
+      opkg_has_pkg luci-app-v2raya && repo_pkgs="$repo_pkgs luci-app-v2raya"
+      opkg_has_pkg luci-i18n-v2raya-zh-cn && repo_pkgs="$repo_pkgs luci-i18n-v2raya-zh-cn"
+      opkg_has_pkg iptables-mod-conntrack-extra && repo_pkgs="$repo_pkgs iptables-mod-conntrack-extra"
+      opkg_has_pkg iptables-mod-extra && repo_pkgs="$repo_pkgs iptables-mod-extra"
+      opkg_has_pkg iptables-mod-filter && repo_pkgs="$repo_pkgs iptables-mod-filter"
+      opkg_has_pkg iptables-mod-tproxy && repo_pkgs="$repo_pkgs iptables-mod-tproxy"
+      opkg_has_pkg kmod-ipt-nat6 && repo_pkgs="$repo_pkgs kmod-ipt-nat6"
+      # shellcheck disable=SC2086
+      install_opkg_packages $repo_pkgs || true
+    else
+      install_local_v2raya_ipks || true
+    fi
+
+    for pkg in kmod-nft-tproxy kmod-nft-socket iptables-mod-socket; do
+      opkg_has_pkg "$pkg" || continue
+      install_opkg_packages "$pkg" || true
+    done
+
+    if ! command -v v2raya >/dev/null 2>&1 && [ "$INSTALL_OFFLINE_IPKS" != "0" ]; then
+      install_local_v2raya_ipks || true
     fi
     return 0
   fi
