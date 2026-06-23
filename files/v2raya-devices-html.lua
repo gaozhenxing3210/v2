@@ -31,14 +31,30 @@ local function add(ip,mac,name,source)
   local lease=lease_devices[mac]
   table.insert(devices,{ip=ip,mac=mac,name=name or names[mac] or (lease and lease.name) or source or "unknown-device",source=source or "online"})
 end
-for mac,d in pairs(lease_devices) do add(d.ip,mac,d.name,"dhcp") end
+
+local online = {}
+local function mark_online(ip,mac,source)
+  if not in_lan(ip) or not valid_mac(mac) then return end
+  mac=norm_mac(mac)
+  if not online[mac] then
+    online[mac] = { ip = ip, mac = mac, source = source }
+  elseif source == "neigh" then
+    online[mac].ip = ip
+    online[mac].source = source
+  end
+end
+
 for line in readfile("/proc/net/arp"):gmatch("[^\n]+") do
   local ip,hw,flags,mac,mask,dev=line:match("^(%d+%.%d+%.%d+%.%d+)%s+(%S+)%s+(%S+)%s+(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s+(%S+)%s+(%S+)")
-  if ip and flags=="0x2" and dev=="br-lan" and mac~="00:00:00:00:00:00" then add(ip,mac,nil,"arp") end
+  if ip and flags=="0x2" and dev=="br-lan" and mac~="00:00:00:00:00:00" then mark_online(ip,mac,"arp") end
 end
 local p=io.popen("ip neigh show dev br-lan 2>/dev/null")
-if p then for line in p:lines() do local ip,mac,state=line:match("^(%d+%.%d+%.%d+%.%d+)%s+.*lladdr%s+(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s+(%S+)"); if ip and mac and state~="FAILED" and state~="INCOMPLETE" then add(ip,mac,nil,"neigh") end end; p:close() end
-for line in readfile(map_file):gmatch("[^\n]+") do local mac,ip,out,label=line:match("^(%S+)%s+(%S+)%s+(%S+)%s*(.*)$"); if mac and ip and valid_mac(mac) and in_lan(ip) then add(ip,mac,label~="" and label or nil,"bound") end end
+if p then for line in p:lines() do local ip,mac,state=line:match("^(%d+%.%d+%.%d+%.%d+)%s+.*lladdr%s+(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s+(%S+)"); if ip and mac and state~="FAILED" and state~="INCOMPLETE" then mark_online(ip,mac,"neigh") end end; p:close() end
+
+for mac, d in pairs(online) do
+  local lease = lease_devices[mac]
+  add(lease and lease.ip or d.ip, mac, lease and lease.name or nil, d.source)
+end
 table.sort(devices,function(a,b) return ipnum(a.ip)<ipnum(b.ip) end)
 if #devices==0 then os.remove(state_file); print('<tr><td colspan="6" class="muted">&#24403;&#21069;&#27809;&#26377;&#25235;&#21040;&#22312;&#32447;&#20869;&#32593;&#35774;&#22791;&#12290;</td></tr>'); os.exit(0) end
 local now=os.time(); local old_seen={}
