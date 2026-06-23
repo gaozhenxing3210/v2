@@ -473,6 +473,13 @@ disable_service_if_present() {
   /etc/init.d/"$svc" disable >/dev/null 2>&1 || true
 }
 
+ensure_access_services_runtime() {
+  service_exists dropbear && /etc/init.d/dropbear enable >/dev/null 2>&1 || true
+  service_exists dropbear && /etc/init.d/dropbear status >/dev/null 2>&1 || /etc/init.d/dropbear start >/dev/null 2>&1 || true
+  service_exists ttyd && /etc/init.d/ttyd enable >/dev/null 2>&1 || true
+  service_exists ttyd && /etc/init.d/ttyd status >/dev/null 2>&1 || /etc/init.d/ttyd start >/dev/null 2>&1 || true
+}
+
 set_root_password_runtime() {
   [ "$SET_ROOT_PASSWORD" = "1" ] || return 0
   if command -v chpasswd >/dev/null 2>&1; then
@@ -723,7 +730,7 @@ lean_services_runtime() {
   for svc in \
     adguardhome adbyby alist aria2 filebrowser frpc frps heimdall homeproxy mihomo mosdns \
     minidlna miniupnpd netdata nginx openclash qbittorrent sing-box smartdns sqm tailscale \
-    ttyd vsftpd zerotier dockerd containerd
+    vsftpd zerotier dockerd containerd
   do
     disable_service_if_present "$svc"
   done
@@ -842,6 +849,7 @@ set_wifi_password_runtime
 optimize_wifi_runtime
 optimize_thermal_runtime
 lean_services_runtime
+ensure_access_services_runtime
 install_frpc_runtime
 
 if [ "$ENABLE_BOOT_START" = "1" ]; then
