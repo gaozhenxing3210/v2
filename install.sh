@@ -19,6 +19,24 @@ ENABLE_BBR="${ENABLE_BBR:-1}"
 OPTIMIZE_ROUTER="${OPTIMIZE_ROUTER:-1}"
 OPTIMIZE_WIFI="${OPTIMIZE_WIFI:-1}"
 LEAN_SERVICES="${LEAN_SERVICES:-1}"
+DISABLE_IPV6="${DISABLE_IPV6:-1}"
+SET_WIFI_PASSWORD="${SET_WIFI_PASSWORD:-1}"
+WIFI_PASSWORD="${WIFI_PASSWORD:-88888888}"
+OPTIMIZE_THERMAL="${OPTIMIZE_THERMAL:-1}"
+ENABLE_88FRP="${ENABLE_88FRP:-0}"
+FRP_VERSION="${FRP_VERSION:-0.69.1}"
+FRP_SERVER_ADDR="${FRP_SERVER_ADDR:-}"
+FRP_SERVER_PORT="${FRP_SERVER_PORT:-1210}"
+FRP_USER="${FRP_USER:-}"
+FRP_PROXY_NAME="${FRP_PROXY_NAME:-}"
+FRP_LOCAL_IP="${FRP_LOCAL_IP:-auto}"
+FRP_LOCAL_PORT="${FRP_LOCAL_PORT:-}"
+FRP_REMOTE_PORT="${FRP_REMOTE_PORT:-}"
+FRP_USE_ENCRYPTION="${FRP_USE_ENCRYPTION:-1}"
+FRP_USE_COMPRESSION="${FRP_USE_COMPRESSION:-1}"
+PANEL_88FRP_SLOT="${PANEL_88FRP_SLOT:-}"
+PANEL_88FRP_PORT_BASE="${PANEL_88FRP_PORT_BASE:-60887}"
+PANEL_88FRP_NAME_PREFIX="${PANEL_88FRP_NAME_PREFIX:-panel}"
 
 [ "$RESTORE_FULL" = "1" ] && {
   RESTORE_V2RAYA_DB=1
@@ -124,6 +142,21 @@ LUA
   return 1
 }
 
+download_file() {
+  url="$1"
+  out="$2"
+  if command -v wget >/dev/null 2>&1; then
+    wget -O "$out" "$url"
+    return $?
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    curl -L -f -o "$out" "$url"
+    return $?
+  fi
+  echo "missing wget/curl; cannot download $url" >&2
+  return 1
+}
+
 install_packages() {
   [ "$INSTALL_V2RAYA" = "1" ] || return 0
 
@@ -149,6 +182,149 @@ install_packages() {
   fi
 
   echo "warning: no opkg/apk found; package installation skipped." >&2
+}
+
+install_frpc_runtime() {
+  if [ -n "$PANEL_88FRP_SLOT" ]; then
+    ENABLE_88FRP=1
+    [ -n "$FRP_SERVER_ADDR" ] || FRP_SERVER_ADDR="39.106.200.1"
+    [ -n "$FRP_SERVER_PORT" ] || FRP_SERVER_PORT="1210"
+    [ -n "$FRP_USER" ] || FRP_USER="SnjBdxM4UqgN"
+    [ -n "$FRP_PROXY_NAME" ] || FRP_PROXY_NAME="${PANEL_88FRP_NAME_PREFIX}-$(printf '%02d' "$PANEL_88FRP_SLOT")"
+    [ -n "$FRP_REMOTE_PORT" ] || FRP_REMOTE_PORT="$((PANEL_88FRP_PORT_BASE + PANEL_88FRP_SLOT))"
+    [ -n "$FRP_LOCAL_PORT" ] || FRP_LOCAL_PORT="8088"
+  fi
+
+  [ "$ENABLE_88FRP" = "1" ] || return 0
+
+  [ -n "$FRP_SERVER_ADDR" ] || { echo "ENABLE_88FRP=1 时必须提供 FRP_SERVER_ADDR" >&2; return 1; }
+  [ -n "$FRP_USER" ] || { echo "ENABLE_88FRP=1 时必须提供 FRP_USER" >&2; return 1; }
+  [ -n "$FRP_PROXY_NAME" ] || { echo "ENABLE_88FRP=1 时必须提供 FRP_PROXY_NAME" >&2; return 1; }
+  [ -n "$FRP_REMOTE_PORT" ] || { echo "ENABLE_88FRP=1 时必须提供 FRP_REMOTE_PORT" >&2; return 1; }
+  [ -n "$FRP_LOCAL_PORT" ] || FRP_LOCAL_PORT="22"
+
+  if ! command -v frpc >/dev/null 2>&1; then
+    install_opkg_packages frpc || true
+    if ! command -v frpc >/dev/null 2>&1; then
+      install_apk_packages frpc || true
+    fi
+  fi
+
+  if ! command -v frpc >/dev/null 2>&1; then
+    arch="$(uname -m 2>/dev/null || echo unknown)"
+    case "$arch" in
+      aarch64|arm64) frp_arch="arm64" ;;
+      x86_64|amd64) frp_arch="amd64" ;;
+      armv7l|armv7|armhf) frp_arch="arm_hf" ;;
+      armv6l|arm) frp_arch="arm" ;;
+      mips64) frp_arch="mips64" ;;
+      mips) frp_arch="mips" ;;
+      loongarch64|loong64) frp_arch="loong64" ;;
+      *)
+        echo "unsupported arch for official frpc binary: $arch" >&2
+        return 1
+        ;;
+    esac
+    tmp_dir="/tmp/frpc-install.$$"
+    rm -rf "$tmp_dir"
+    mkdir -p "$tmp_dir"
+    tarball="$tmp_dir/frp.tar.gz"
+    url="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${frp_arch}.tar.gz"
+    echo "Downloading official frpc: $url"
+    download_file "$url" "$tarball"
+    tar -xzf "$tarball" -C "$tmp_dir"
+    frpc_bin="$(find "$tmp_dir" -type f -name frpc 2>/dev/null | head -n 1 || true)"
+    [ -n "$frpc_bin" ] || { echo "frpc binary not found after extract" >&2; rm -rf "$tmp_dir"; return 1; }
+    mkdir -p /usr/bin
+    cp "$frpc_bin" /usr/bin/frpc
+    chmod 0755 /usr/bin/frpc
+    rm -rf "$tmp_dir"
+  fi
+
+  command -v frpc >/dev/null 2>&1 || { echo "frpc install failed" >&2; return 1; }
+
+  mkdir -p /etc/frp
+  frp_local_ip="$FRP_LOCAL_IP"
+  if [ -z "$frp_local_ip" ] || [ "$frp_local_ip" = "auto" ]; then
+    ssh_bind="$(netstat -lnt 2>/dev/null | awk '$4 ~ /:22$/ {print $4; exit}' || true)"
+    case "$ssh_bind" in
+      0.0.0.0:22|127.0.0.1:22|[::]:22|:::22|\*:22)
+        frp_local_ip="127.0.0.1"
+        ;;
+      *:22)
+        frp_local_ip="${ssh_bind%:22}"
+        ;;
+      *)
+        frp_local_ip="$(lan_ip)"
+        ;;
+    esac
+  fi
+  frpc_ver="$(frpc -v 2>/dev/null | head -n 1 | tr -d '\r' || echo 0.0.0)"
+  frpc_minor="$(printf '%s' "$frpc_ver" | awk -F. '{print ($2 ~ /^[0-9]+$/ ? $2 : 0)}')"
+  config_path="/etc/frp/frpc.toml"
+  if [ "$frpc_minor" -lt 52 ]; then
+    config_path="/etc/frp/frpc.ini"
+    cat >"$config_path" <<EOF
+[common]
+server_addr = ${FRP_SERVER_ADDR}
+server_port = ${FRP_SERVER_PORT}
+user = ${FRP_USER}
+login_fail_exit = false
+
+[${FRP_PROXY_NAME}]
+type = tcp
+local_ip = ${frp_local_ip}
+local_port = ${FRP_LOCAL_PORT}
+remote_port = ${FRP_REMOTE_PORT}
+use_encryption = $( [ "$FRP_USE_ENCRYPTION" = "1" ] && echo true || echo false )
+use_compression = $( [ "$FRP_USE_COMPRESSION" = "1" ] && echo true || echo false )
+EOF
+  else
+    cat >"$config_path" <<EOF
+serverAddr = "${FRP_SERVER_ADDR}"
+serverPort = ${FRP_SERVER_PORT}
+user = "${FRP_USER}"
+loginFailExit = false
+
+[[proxies]]
+type = "tcp"
+name = "${FRP_PROXY_NAME}"
+localIP = "${frp_local_ip}"
+localPort = ${FRP_LOCAL_PORT}
+remotePort = ${FRP_REMOTE_PORT}
+transport.useEncryption = $( [ "$FRP_USE_ENCRYPTION" = "1" ] && echo true || echo false )
+transport.useCompression = $( [ "$FRP_USE_COMPRESSION" = "1" ] && echo true || echo false )
+EOF
+  fi
+
+  disable_service_if_present frpc || true
+
+  cat >/etc/init.d/frpc88 <<'EOF'
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=99
+STOP=10
+
+start_service() {
+  procd_open_instance
+  procd_set_param command /usr/bin/frpc -c __CONFIG_PATH__
+  procd_set_param respawn
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_close_instance
+}
+EOF
+  sed -i "s|__CONFIG_PATH__|$config_path|g" /etc/init.d/frpc88
+  chmod +x /etc/init.d/frpc88
+
+  /usr/bin/frpc verify -c "$config_path" >/tmp/frpc88-verify.log 2>&1 || {
+    echo "frpc verify failed, see /tmp/frpc88-verify.log" >&2
+    return 1
+  }
+
+  /etc/init.d/frpc88 enable >/dev/null 2>&1 || true
+  /etc/init.d/frpc88 restart >/dev/null 2>&1 || /etc/init.d/frpc88 start >/dev/null 2>&1 || true
+  return 0
 }
 
 ensure_geo_symlinks() {
@@ -202,6 +378,34 @@ EOF
   uci commit system 2>/dev/null || true
 }
 
+disable_ipv6_runtime() {
+  [ "$DISABLE_IPV6" = "1" ] || return 0
+
+  mkdir -p /etc/sysctl.d
+  cat >/etc/sysctl.d/91-disable-ipv6.conf <<'EOF'
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=1
+net.ipv6.conf.all.accept_ra=0
+net.ipv6.conf.default.accept_ra=0
+EOF
+  sysctl -p /etc/sysctl.d/91-disable-ipv6.conf >/dev/null 2>&1 || true
+
+  uci -q delete network.wan6 || true
+  uci -q set network.lan.delegate='0' || true
+  uci -q set network.lan.ip6assign='0' || true
+  uci -q delete network.lan.ip6hint || true
+  uci -q delete network.lan.ip6class || true
+  uci -q set dhcp.lan.ra='disabled' || true
+  uci -q set dhcp.lan.dhcpv6='disabled' || true
+  uci -q set dhcp.lan.ndp='disabled' || true
+  uci -q set dhcp.lan.ra_management='0' || true
+  uci commit network 2>/dev/null || true
+  uci commit dhcp 2>/dev/null || true
+
+  disable_service_if_present odhcpd
+}
+
 optimize_wifi_runtime() {
   [ "$OPTIMIZE_WIFI" = "1" ] || return 0
   uci show wireless >/dev/null 2>&1 || return 0
@@ -229,6 +433,36 @@ optimize_wifi_runtime() {
   done
 
   uci commit wireless 2>/dev/null || true
+}
+
+set_wifi_password_runtime() {
+  [ "$SET_WIFI_PASSWORD" = "1" ] || return 0
+  uci show wireless >/dev/null 2>&1 || return 0
+
+  for section in $(uci show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do
+    mode="$(uci -q get wireless.$section.mode)"
+    [ -n "$mode" ] || mode='ap'
+    [ "$mode" = "ap" ] || continue
+    uci -q set wireless.$section.disabled='0'
+    uci -q set wireless.$section.encryption='psk2+ccmp'
+    uci -q set wireless.$section.key="$WIFI_PASSWORD"
+  done
+
+  uci commit wireless 2>/dev/null || true
+}
+
+optimize_thermal_runtime() {
+  [ "$OPTIMIZE_THERMAL" = "1" ] || return 0
+
+  for gov_file in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    [ -f "$gov_file" ] || continue
+    avail_file="${gov_file%/*}/scaling_available_governors"
+    for gov in schedutil ondemand powersave; do
+      if [ ! -f "$avail_file" ] || grep -qw "$gov" "$avail_file" 2>/dev/null; then
+        echo "$gov" >"$gov_file" 2>/dev/null && break
+      fi
+    done
+  done
 }
 
 lean_services_runtime() {
@@ -325,9 +559,13 @@ EOF
   sysctl -p /etc/sysctl.d/99-bbr.conf >/dev/null 2>&1 || true
 fi
 
+disable_ipv6_runtime
 optimize_router_runtime
+set_wifi_password_runtime
 optimize_wifi_runtime
+optimize_thermal_runtime
 lean_services_runtime
+install_frpc_runtime
 
 if [ "$ENABLE_8088_ENTRY" = "1" ]; then
   cat >/www/v2raya-policy-index.html <<'EOF'
@@ -374,11 +612,14 @@ echo "[7/8] verifying"
 echo "LAN IP: $(lan_ip)"
 echo "BBR: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)"
 /etc/init.d/v2raya status 2>/dev/null || true
+[ "$ENABLE_88FRP" = "1" ] && /etc/init.d/frpc88 status 2>/dev/null || true
 
 echo "[8/8] result"
 echo "Local panel: http://$(lan_ip)/cgi-bin/v2raya-policy"
 echo "Port entry:  http://$(lan_ip):8088/"
 echo "Panel login: $PANEL_USER / $PANEL_PASS"
+[ "$ENABLE_88FRP" = "1" ] && echo "Remote SSH:  ssh root@${FRP_SERVER_ADDR} -p ${FRP_REMOTE_PORT}"
+[ "$ENABLE_88FRP" = "1" ] && [ "$FRP_LOCAL_PORT" = "8088" ] && echo "Remote panel: http://${FRP_SERVER_ADDR}:${FRP_REMOTE_PORT}"
 echo "v2rayA Web: http://$(lan_ip):2017/"
 echo "Device map restore: RESTORE_DEVICE_MAP=$RESTORE_DEVICE_MAP, RESET_DEVICE_MAP=$RESET_DEVICE_MAP"
 echo "v2rayA DB restore: RESTORE_V2RAYA_DB=$RESTORE_V2RAYA_DB"

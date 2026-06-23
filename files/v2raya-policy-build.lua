@@ -6,6 +6,7 @@ local routing_json = "/tmp/v2raya-policy.routing.json"
 local routing_txt = "/tmp/v2raya-policy.routing.txt"
 local allow_file = "/tmp/v2raya-policy.allow-macs"
 local count_file = "/tmp/v2raya-policy.active-count"
+local host_sync_file = "/tmp/v2raya-policy.hosts.tsv"
 
 local function trim(s) return (s or ""):gsub("^%s+", ""):gsub("%s+$", "") end
 local function norm_mac(s) return trim(s):lower():gsub("[^0-9a-f:]", "") end
@@ -79,7 +80,11 @@ for line in readfile(map_file):gmatch("[^\n]+") do
     outbound = trim(outbound)
     label = trim(label)
     if valid_mac(mac) and valid_outbound(outbound) then
-      if ip == "-" or ip == "auto" then ip = leases[mac] and leases[mac].ip or "" end
+      if leases[mac] and valid_ip(leases[mac].ip) then
+        ip = leases[mac].ip
+      elseif ip == "-" or ip == "auto" then
+        ip = ""
+      end
       if valid_ip(ip) and not seen[mac] then
         seen[mac] = true
         table.insert(entries, { mac = mac, ip = ip, outbound = outbound, label = label })
@@ -105,6 +110,9 @@ writefile(routing_txt, routing_s)
 writefile(routing_json, json.stringify({ routingA = routing_s }))
 
 local macs = {}
+local hosts = {}
 for _, e in ipairs(entries) do table.insert(macs, e.mac) end
+for _, e in ipairs(entries) do table.insert(hosts, string.format("%s\t%s", e.mac, e.ip)) end
 writefile(allow_file, table.concat(macs, " "))
 writefile(count_file, tostring(#entries))
+writefile(host_sync_file, (#hosts > 0) and (table.concat(hosts, "\n") .. "\n") or "")

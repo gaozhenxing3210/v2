@@ -8,9 +8,26 @@ AUTH="/etc/v2raya-policy.auth"
 : "${DNS_HIJACK_PRIMARY:=1.1.1.1}"
 : "${DNS_HIJACK_SECONDARY:=8.8.8.8}"
 MAP="/etc/v2raya-policy.map"
+HOST_SYNC="/tmp/v2raya-policy.hosts.tsv"
 /usr/libexec/v2raya-policy-build.lua
 ALLOW_MACS="$(cat /tmp/v2raya-policy.allow-macs 2>/dev/null || true)"
 COUNT="$(cat /tmp/v2raya-policy.active-count 2>/dev/null || echo 0)"
+find_dhcp_host_section_by_mac() {
+  local mac_lc="$1"
+  uci show dhcp 2>/dev/null | awk -v m="$mac_lc" '
+    BEGIN { IGNORECASE=1; sec="" }
+    /^dhcp\.[^=]+=host$/ {
+      split($0, a, "=")
+      sec=a[1]
+      sub(/^dhcp\./, "", sec)
+      next
+    }
+    index(tolower($0), ".mac='\''" tolower(m) "'\''") > 0 {
+      print sec
+      exit
+    }
+  '
+}
 setting_needs_sync() {
   lua - "$1" "$2" <<'LUA'
 local json = require "luci.jsonc"
@@ -49,20 +66,25 @@ chmod 644 /etc/v2raya-device-policy.conf
   printf 'DNS_HIJACK_SECONDARY="%s"\n' "$DNS_HIJACK_SECONDARY"
 } > /etc/v2raya-dns-policy.conf
 chmod 644 /etc/v2raya-dns-policy.conf
-if [ -s "$MAP" ]; then
-  awk '!/^#/ && NF>=3 {print $1, $2}' "$MAP" | while read mac ip; do
+if [ -s "$HOST_SYNC" ]; then
+  dhcp_changed=0
+  while IFS="$(printf '\t')" read mac ip; do
     case "$mac" in ''|*[!0-9a-fA-F:]*) continue ;; esac
     case "$ip" in *.*.*.*) ;; *) continue ;; esac
-    if ! uci show dhcp 2>/dev/null | grep -qi "mac='$mac'"; then
+    s="$(find_dhcp_host_section_by_mac "$mac" || true)"
+    if [ -z "$s" ]; then
       s="$(uci add dhcp host)"
-      uci set dhcp.$s.name="v2raya-$(echo "$mac" | tr ':' '-')"
-      uci set dhcp.$s.mac="$mac"
-      uci set dhcp.$s.ip="$ip"
-      uci commit dhcp
     fi
-  done
-  /etc/init.d/dnsmasq reload >/dev/null 2>&1 || true
-  /etc/init.d/odhcpd reload >/dev/null 2>&1 || true
+    uci set dhcp.$s.name="v2raya-$(echo "$mac" | tr ':' '-')"
+    uci set dhcp.$s.mac="$mac"
+    uci set dhcp.$s.ip="$ip"
+    dhcp_changed=1
+  done < "$HOST_SYNC"
+  if [ "$dhcp_changed" = "1" ]; then
+    uci commit dhcp
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || /etc/init.d/dnsmasq reload >/dev/null 2>&1 || true
+    /etc/init.d/odhcpd reload >/dev/null 2>&1 || true
+  fi
 fi
 tmp_login="/tmp/v2raya-login.$$"
 lua - "$V2RAYA_USER" "$V2RAYA_PASS" > "$tmp_login" <<'LUA'
