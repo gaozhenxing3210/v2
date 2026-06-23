@@ -67,8 +67,8 @@ if [ -n "$KIT_URL" ]; then
 else
   ok=0
   for url in \
-    "https://cdn.jsdelivr.net/gh/$REPO@$BRANCH/dist/v2raya-policy-kit.tar.gz" \
-    "https://raw.githubusercontent.com/$REPO/$BRANCH/dist/v2raya-policy-kit.tar.gz"
+    "https://raw.githubusercontent.com/$REPO/$BRANCH/dist/v2raya-policy-kit.tar.gz" \
+    "https://cdn.jsdelivr.net/gh/$REPO@$BRANCH/dist/v2raya-policy-kit.tar.gz"
   do
     if download "$url" "$archive"; then
       ok=1
