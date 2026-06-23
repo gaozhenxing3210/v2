@@ -1,0 +1,173 @@
+#!/bin/sh
+# Import node links line-by-line into v2rayA. It does not bind imported nodes.
+# Duplicate protection: if the same proxy address/port already exists in v2rayA, skip it.
+set -eu
+AUTH="/etc/v2raya-policy.auth"
+[ -f "$AUTH" ] && . "$AUTH"
+: "${V2RAYA_API:=http://127.0.0.1:2017}"
+: "${V2RAYA_USER:=admin}"
+: "${V2RAYA_PASS:=weifeng}"
+INPUT="${1:-}"
+SUMMARY="/tmp/v2raya-import-lines.summary"
+: > "$SUMMARY"
+[ -n "$INPUT" ] && [ -f "$INPUT" ] || { echo "missing input file" > "$SUMMARY"; exit 1; }
+
+tmp="/tmp/v2raya-import-lines.$$"
+trap 'rm -f "$tmp".*' EXIT
+
+json_string() {
+  lua - "$1" <<'LUA'
+local json = require "luci.jsonc"
+local path = arg[1]
+local f = io.open(path, "r")
+local s = f and f:read("*a") or ""
+if f then f:close() end
+print(json.stringify({ url = s }))
+LUA
+}
+
+server_ids() {
+  lua - "$1" <<'LUA'
+local json = require "luci.jsonc"
+local path = arg[1]
+local f = io.open(path, "r")
+local obj = nil
+if f then obj = json.parse(f:read("*a") or ""); f:close() end
+local t = obj and obj.data and obj.data.touch or {}
+for _, s in ipairs(t.servers or {}) do print(s.id) end
+LUA
+}
+
+server_keys() {
+  lua - "$1" <<'LUA'
+local json = require "luci.jsonc"
+local function key(addr, port)
+  addr = tostring(addr or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+  port = tostring(port or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if addr == "" then return nil end
+  if port ~= "" and not addr:match(":" .. port .. "$") then addr = addr .. ":" .. port end
+  return addr
+end
+local path = arg[1]
+local f = io.open(path, "r")
+local obj = nil
+if f then obj = json.parse(f:read("*a") or ""); f:close() end
+local t = obj and obj.data and obj.data.touch or {}
+for _, s in ipairs(t.servers or {}) do local k = key(s.address, s.port); if k then print(k) end end
+for _, sub in ipairs(t.subscriptions or {}) do
+  for _, s in ipairs(sub.servers or {}) do local k = key(s.address, s.port); if k then print(k) end end
+end
+LUA
+}
+
+node_key() {
+  lua - "$1" <<'LUA'
+local path = arg[1]
+local f = io.open(path, "r")
+local s = f and f:read("*a") or ""
+if f then f:close() end
+s = s:gsub("^%s+", ""):gsub("%s+$", "")
+local scheme, rest = s:match("^([%w+.-]+)://(.+)$")
+if not rest then os.exit(0) end
+rest = rest:gsub("#.*$", "")
+if rest:find("@", 1, true) then rest = rest:match("@(.+)$") or rest end
+rest = rest:gsub("^[/%s]+", "")
+rest = rest:gsub("[/?].*$", "")
+local host, port
+if rest:sub(1, 1) == "[" then
+  host, port = rest:match("^%[([^%]]+)%]:?(%d*)")
+else
+  host, port = rest:match("^([^:]+):?(%d*)")
+end
+host = tostring(host or ""):lower()
+port = tostring(port or "")
+if host == "" then os.exit(0) end
+if port ~= "" then print(host .. ":" .. port) else print(host) end
+LUA
+}
+
+new_server_id() {
+  lua - "$1" "$2" <<'LUA'
+local function readset(path)
+  local set = {}
+  local f = io.open(path, "r")
+  if f then for line in f:lines() do local n = tonumber(line); if n then set[n] = true end end; f:close() end
+  return set
+end
+local before = readset(arg[1])
+local best = nil
+local f = io.open(arg[2], "r")
+if f then
+  for line in f:lines() do
+    local n = tonumber(line)
+    if n and not before[n] and (not best or n < best) then best = n end
+  end
+  f:close()
+end
+if best then print(best) end
+LUA
+}
+
+tmp_login="$tmp.login"
+lua - "$V2RAYA_USER" "$V2RAYA_PASS" > "$tmp_login" <<'LUA'
+local json = require "luci.jsonc"
+print(json.stringify({ username = arg[1] or "", password = arg[2] or "" }))
+LUA
+login_json="$(curl -fsS -m 10 -H 'Content-Type: application/json' --data-binary @"$tmp_login" "$V2RAYA_API/api/login")"
+token="$(printf '%s' "$login_json" | jsonfilter -q -e '@.data.token' 2>/dev/null || true)"
+[ -n "$token" ] || { echo "v2rayA login failed" > "$SUMMARY"; exit 1; }
+
+line_no=0
+ok_count=0
+fail_count=0
+skip_count=0
+while IFS= read -r raw || [ -n "$raw" ]; do
+  raw="$(printf '%s' "$raw" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  [ -z "$raw" ] && continue
+  case "$raw" in \#*) continue ;; esac
+  line_no=$((line_no + 1))
+  node="$raw"
+  first="${raw%%[[:space:]]*}"
+  rest="${raw#*[[:space:]]}"
+  if [ "$rest" != "$raw" ]; then
+    low="$(printf '%s' "$first" | tr 'A-Z' 'a-z')"
+    case "$low" in
+      dev[0-9]|dev[0-9][0-9]|id[0-9]|id[0-9][0-9]|[0-9]|[0-9][0-9]) node="$rest" ;;
+    esac
+  fi
+  printf '%s' "$node" | grep -Eq '://' || { echo "line $line_no: skipped, not a node link" >> "$SUMMARY"; fail_count=$((fail_count+1)); continue; }
+
+  printf '%s' "$node" > "$tmp.node"
+  key="$(node_key "$tmp.node" || true)"
+  curl -fsS -m 15 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$tmp.before.touch" || true
+  server_keys "$tmp.before.touch" > "$tmp.before.keys"
+  if [ -n "$key" ] && grep -Fxq "$key" "$tmp.before.keys" 2>/dev/null; then
+    echo "line $line_no: skipped duplicate $key" >> "$SUMMARY"
+    skip_count=$((skip_count+1))
+    continue
+  fi
+
+  server_ids "$tmp.before.touch" > "$tmp.before.ids"
+  json_string "$tmp.node" > "$tmp.payload"
+  resp="$(curl -fsS -m 120 -H 'Content-Type: application/json' -H "Authorization: $token" --data-binary @"$tmp.payload" "$V2RAYA_API/api/import" 2>/dev/null || true)"
+  code="$(printf '%s' "$resp" | jsonfilter -q -e '@.code' 2>/dev/null || true)"
+  if [ "$code" != "SUCCESS" ]; then
+    msg="$(printf '%s' "$resp" | jsonfilter -q -e '@.message' 2>/dev/null || true)"
+    echo "line $line_no: import failed ${msg:-}" >> "$SUMMARY"
+    fail_count=$((fail_count+1))
+    continue
+  fi
+  sleep 1
+  curl -fsS -m 15 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$tmp.after.touch" || true
+  server_ids "$tmp.after.touch" > "$tmp.after.ids"
+  sid="$(new_server_id "$tmp.before.ids" "$tmp.after.ids")"
+  if [ -z "$sid" ]; then
+    echo "line $line_no: imported, but no new normal server ID found" >> "$SUMMARY"
+    ok_count=$((ok_count+1))
+    continue
+  fi
+  echo "line $line_no -> ID$sid: imported" >> "$SUMMARY"
+  ok_count=$((ok_count+1))
+done < "$INPUT"
+echo "done: OK=$ok_count FAIL=$fail_count SKIP=$skip_count" >> "$SUMMARY"
+cat "$SUMMARY"

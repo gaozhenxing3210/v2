@@ -1,0 +1,9 @@
+*.sh text eol=lf
+files/* text eol=lf
+snapshot-config/* text eol=lf
+*.lua text eol=lf
+*.cgi text eol=lf
+*.md text eol=lf
+*.ps1 text eol=crlf
+*.ipk binary
+*.base64 text eol=lf

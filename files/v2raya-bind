@@ -1,0 +1,132 @@
+#!/bin/sh
+# Bind v2rayA outbound slots (dev02/dev03/...) to server IDs.
+# Usage:
+#   v2raya-bind list
+#   v2raya-bind status
+#   v2raya-bind dev02 2
+#   v2raya-bind dev03 ID3
+#   v2raya-bind batch dev02=2 dev03=3
+set -eu
+AUTH="/etc/v2raya-policy.auth"
+[ -f "$AUTH" ] && . "$AUTH"
+: "${V2RAYA_API:=http://127.0.0.1:2017}"
+: "${V2RAYA_USER:=admin}"
+: "${V2RAYA_PASS:=weifeng}"
+
+tmp="/tmp/v2raya-bind.$$.json"
+trap 'rm -f "$tmp" "$tmp.touch"' EXIT
+
+usage() {
+  cat <<'EOF'
+Usage:
+  v2raya-bind list                 # show server IDs
+  v2raya-bind status               # show outbound -> ID
+  v2raya-bind dev02 2              # bind dev02 to server ID 2
+  v2raya-bind dev03 ID3            # bind dev03 to server ID 3
+  v2raya-bind batch dev02=2 dev03=3
+EOF
+}
+
+login() {
+  tmp_login="/tmp/v2raya-login.$$"
+  lua - "$V2RAYA_USER" "$V2RAYA_PASS" > "$tmp_login" <<'LUA'
+local json = require "luci.jsonc"
+print(json.stringify({ username = arg[1] or "", password = arg[2] or "" }))
+LUA
+  login_json="$(curl -fsS -m 10 -H 'Content-Type: application/json' --data-binary @"$tmp_login" "$V2RAYA_API/api/login")"
+  rm -f "$tmp_login"
+  token="$(printf '%s' "$login_json" | jsonfilter -q -e '@.data.token' 2>/dev/null || true)"
+  [ -n "$token" ] || { echo "login failed" >&2; exit 1; }
+}
+
+touch() {
+  curl -fsS -m 15 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$tmp.touch"
+}
+
+print_list() {
+  touch
+  lua - "$tmp.touch" <<'LUA'
+local json = require "luci.jsonc"
+local path = arg[1]
+local f = io.open(path, "r"); local obj = json.parse(f:read("*a")); f:close()
+local t = obj and obj.data and obj.data.touch or {}
+print("???? ID ??:")
+for _, s in ipairs(t.servers or {}) do
+  print(string.format("  ID%-3s  %-28s  %s  %s", tostring(s.id), s.name or "", s.address or "", s.net or ""))
+end
+if #(t.subscriptions or {}) > 0 then
+  print("????:")
+  for sub, ss in ipairs(t.subscriptions or {}) do
+    for _, s in ipairs(ss.servers or {}) do
+      print(string.format("  SUB%-2d ID%-3s  %-28s  %s", sub-1, tostring(s.id), s.name or "", s.address or ""))
+    end
+  end
+end
+LUA
+}
+
+print_status() {
+  touch
+  lua - "$tmp.touch" <<'LUA'
+local json = require "luci.jsonc"
+local path = arg[1]
+local f = io.open(path, "r"); local obj = json.parse(f:read("*a")); f:close()
+local t = obj and obj.data and obj.data.touch or {}
+local names = {}
+for _, s in ipairs(t.servers or {}) do names["server:" .. tostring(s.id) .. ":0"] = (s.name or "") .. " " .. (s.address or "") end
+for sub, ss in ipairs(t.subscriptions or {}) do
+  for _, s in ipairs(ss.servers or {}) do names["subscriptionServer:" .. tostring(s.id) .. ":" .. tostring(sub-1)] = (s.name or "") .. " " .. (s.address or "") end
+end
+print("??????:")
+for _, c in ipairs(t.connectedServer or {}) do
+  local k = tostring(c._type) .. ":" .. tostring(c.id) .. ":" .. tostring(c.sub or 0)
+  print(string.format("  %-6s -> %-18s ID%-3s  %s", c.outbound or "", c._type or "", tostring(c.id), names[k] or ""))
+end
+LUA
+}
+
+bind_one() {
+  outbound="$1"
+  raw_id="$2"
+  typ="${3:-server}"
+  sub="${4:-0}"
+  id="$(printf '%s' "$raw_id" | sed 's/^[Ii][Dd]//')"
+  echo "$outbound" | grep -Eq '^(proxy|dev[0-9][0-9])$' || { echo "bad outbound: $outbound" >&2; exit 2; }
+  echo "$id" | grep -Eq '^[0-9]+$' || { echo "bad id: $raw_id" >&2; exit 2; }
+  echo "$sub" | grep -Eq '^[0-9]+$' || { echo "bad sub: $sub" >&2; exit 2; }
+  case "$typ" in server|subscriptionServer) ;; *) echo "bad type: $typ" >&2; exit 2 ;; esac
+  payload="{\"id\":$id,\"_type\":\"$typ\",\"sub\":$sub,\"outbound\":\"$outbound\"}"
+  resp="$(curl -fsS -m 25 -H 'Content-Type: application/json' -H "Authorization: $token" -d "$payload" "$V2RAYA_API/api/connection")"
+  code="$(printf '%s' "$resp" | jsonfilter -q -e '@.code' 2>/dev/null || true)"
+  if [ "$code" = "SUCCESS" ]; then
+    echo "OK: $outbound -> ${typ} ID$id sub $sub"
+  else
+    msg="$(printf '%s' "$resp" | jsonfilter -q -e '@.message' 2>/dev/null || true)"
+    echo "FAIL: ${msg:-$resp}" >&2
+    exit 1
+  fi
+}
+
+[ $# -gt 0 ] || { usage; exit 0; }
+login
+case "$1" in
+  list) print_list ;;
+  status) print_status ;;
+  batch)
+    shift
+    [ $# -gt 0 ] || { usage; exit 2; }
+    for pair in "$@"; do
+      outbound="${pair%%=*}"
+      id="${pair#*=}"
+      [ "$outbound" != "$pair" ] || { echo "bad pair: $pair" >&2; exit 2; }
+      bind_one "$outbound" "$id"
+    done
+    print_status
+  ;;
+  -h|--help|help) usage ;;
+  *)
+    [ $# -ge 2 ] || { usage; exit 2; }
+    bind_one "$1" "$2" "${3:-server}" "${4:-0}"
+    print_status
+  ;;
+esac

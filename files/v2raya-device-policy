@@ -1,0 +1,32 @@
+#!/bin/sh
+# Keep v2rayA transparent proxy limited to selected LAN devices.
+# If ALLOW_MACS is empty, all LAN devices bypass v2rayA.
+CONF="/etc/v2raya-device-policy.conf"
+[ -f "$CONF" ] && . "$CONF"
+[ -n "$LAN_IF" ] || LAN_IF="br-lan"
+[ -n "$ALLOW_MACS" ] || ALLOW_MACS=""
+NFT="/usr/sbin/nft"; [ -x "$NFT" ] || NFT="nft"
+$NFT list chain inet v2raya tp_pre >/dev/null 2>&1 || exit 0
+$NFT -a list chain inet v2raya tp_pre 2>/dev/null | awk '/codex-v2raya-device-policy/ {print $NF}' | while read handle; do
+    case "$handle" in ''|*[!0-9]*) continue ;; esac
+    $NFT delete rule inet v2raya tp_pre handle "$handle" 2>/dev/null
+ done
+set -- $ALLOW_MACS
+if [ "$#" -eq 0 ]; then
+    $NFT insert rule inet v2raya tp_pre iifname "$LAN_IF" counter return comment "codex-v2raya-device-policy"
+    exit 0
+fi
+if [ "$#" -eq 1 ]; then
+    $NFT insert rule inet v2raya tp_pre iifname "$LAN_IF" ether saddr != "$1" counter return comment "codex-v2raya-device-policy"
+else
+    tmp="/tmp/v2raya-device-policy.nft"
+    {
+        echo "insert rule inet v2raya tp_pre iifname \"$LAN_IF\" ether saddr != {"
+        first=1
+        for mac in "$@"; do
+            if [ "$first" = 1 ]; then printf '  %s' "$mac"; first=0; else printf ', %s' "$mac"; fi
+        done
+        echo " } counter return comment \"codex-v2raya-device-policy\""
+    } > "$tmp"
+    $NFT -f "$tmp"; rm -f "$tmp"
+fi

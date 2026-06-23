@@ -1,0 +1,11 @@
+
+config v2raya 'config'
+	option enabled '1'
+	option address '0.0.0.0:2017'
+	option ipv6_support 'auto'
+	option nftables_support 'auto'
+	option log_level 'info'
+	option log_max_days '3'
+	option log_disable_color '1'
+	option v2ray_bin '/usr/bin/xray'
+
