@@ -112,6 +112,7 @@ ensure_geo_symlinks() {
   [ -f /usr/share/v2ray/geosite.dat ] && [ ! -f /usr/share/xray/geosite.dat ] && ln -sf /usr/share/v2ray/geosite.dat /usr/share/xray/geosite.dat
   [ -f /usr/share/xray/geoip.dat ] && [ ! -f /usr/share/v2ray/geoip.dat ] && ln -sf /usr/share/xray/geoip.dat /usr/share/v2ray/geoip.dat
   [ -f /usr/share/xray/geosite.dat ] && [ ! -f /usr/share/v2ray/geosite.dat ] && ln -sf /usr/share/xray/geosite.dat /usr/share/v2ray/geosite.dat
+  return 0
 }
 
 lan_ip() {
