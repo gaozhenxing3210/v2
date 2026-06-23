@@ -79,6 +79,48 @@ install_apk_packages() {
   apk add "$@" || true
 }
 
+decode_base64_file() {
+  src="$1"
+  dst="$2"
+  if command -v base64 >/dev/null 2>&1; then
+    base64 -d "$src" >"$dst"
+    return $?
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl base64 -d -A -in "$src" -out "$dst"
+    return $?
+  fi
+  if command -v lua >/dev/null 2>&1; then
+    lua - "$src" "$dst" <<'LUA'
+local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local map = {}
+for i = 1, #alphabet do map[alphabet:sub(i,i)] = i - 1 end
+local src, dst = arg[1], arg[2]
+local f = assert(io.open(src, "r"))
+local s = f:read("*a") or ""
+f:close()
+s = s:gsub("%s+", "")
+local out = {}
+for i = 1, #s, 4 do
+  local c1, c2, c3, c4 = s:sub(i,i), s:sub(i+1,i+1), s:sub(i+2,i+2), s:sub(i+3,i+3)
+  local b1, b2 = map[c1], map[c2]
+  if not b1 or not b2 then break end
+  local b3, b4 = map[c3], map[c4]
+  local n = b1 * 262144 + b2 * 4096 + (b3 or 0) * 64 + (b4 or 0)
+  out[#out+1] = string.char(math.floor(n / 65536) % 256)
+  if c3 ~= "=" and b3 then out[#out+1] = string.char(math.floor(n / 256) % 256) end
+  if c4 ~= "=" and b4 then out[#out+1] = string.char(n % 256) end
+end
+f = assert(io.open(dst, "wb"))
+f:write(table.concat(out))
+f:close()
+LUA
+    return $?
+  fi
+  echo "Cannot decode base64: install base64, openssl, or lua." >&2
+  return 1
+}
+
 install_packages() {
   [ "$INSTALL_V2RAYA" = "1" ] || return 0
 
@@ -219,8 +261,9 @@ fi
 if [ "$RESTORE_V2RAYA_DB" = "1" ]; then
   echo "[optional] restoring v2rayA database"
   /etc/init.d/v2raya stop >/dev/null 2>&1 || true
-  [ -f optional-v2raya-db/bolt.db.base64 ] && base64 -d optional-v2raya-db/bolt.db.base64 >/etc/v2raya/bolt.db
-  [ -f optional-v2raya-db/boltv4.db.base64 ] && base64 -d optional-v2raya-db/boltv4.db.base64 >/etc/v2raya/boltv4.db
+  [ -f optional-v2raya-db/bolt.db.base64 ] && decode_base64_file optional-v2raya-db/bolt.db.base64 /etc/v2raya/bolt.db
+  [ -f optional-v2raya-db/boltv4.db.base64 ] && decode_base64_file optional-v2raya-db/boltv4.db.base64 /etc/v2raya/boltv4.db
+  chmod 600 /etc/v2raya/bolt.db /etc/v2raya/boltv4.db 2>/dev/null || true
 fi
 
 /etc/init.d/v2raya enable >/dev/null 2>&1 || true
