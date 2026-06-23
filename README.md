@@ -24,6 +24,32 @@ https://github.com/gaozhenxing3210/v2
 在新路由 SSH 里直接执行：
 
 ```sh
+wget -O- https://raw.githubusercontent.com/gaozhenxing3210/v2/main/onekey.sh | sh
+```
+
+如果没有 `wget`，但有 `curl`：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gaozhenxing3210/v2/main/onekey.sh | sh
+```
+
+这个一键脚本会从 GitHub 仓库下载 `dist/v2raya-policy-kit.tar.gz`，然后自动解压并执行安装。
+
+默认行为：
+
+- 恢复随包的 v2rayA 数据库：`RESTORE_V2RAYA_DB=1`
+- 不恢复旧设备 MAC/IP 绑定：`RESTORE_DEVICE_MAP=0`
+- 不修改 LAN IP 和网段
+
+如果不想恢复 v2rayA 数据库，用：
+
+```sh
+RESTORE_V2RAYA_DB=0 wget -O- https://raw.githubusercontent.com/gaozhenxing3210/v2/main/onekey.sh | sh
+```
+
+旧的源码包安装方式也可用：
+
+```sh
 GITHUB_REPO=gaozhenxing3210/v2 sh -c "$(wget -O- https://raw.githubusercontent.com/gaozhenxing3210/v2/main/bootstrap.sh)"
 ```
 
