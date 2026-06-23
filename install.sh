@@ -346,6 +346,19 @@ service_exists() {
   [ -x "/etc/init.d/$1" ]
 }
 
+choose_qdisc() {
+  current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+  if modprobe sch_fq >/dev/null 2>&1; then
+    echo "fq"
+    return 0
+  fi
+  if [ -n "$current_qdisc" ]; then
+    echo "$current_qdisc"
+    return 0
+  fi
+  echo "fq_codel"
+}
+
 port_listening() {
   port="$1"
   if command -v netstat >/dev/null 2>&1; then
@@ -529,21 +542,25 @@ optimize_router_runtime() {
   [ "$OPTIMIZE_ROUTER" = "1" ] || return 0
 
   mkdir -p /etc/sysctl.d /etc/modules.d
-  modprobe sch_fq 2>/dev/null || true
   modprobe tcp_bbr 2>/dev/null || true
+  qdisc="$(choose_qdisc)"
 
   {
     echo "tcp_bbr"
-    echo "sch_fq"
+    [ "$qdisc" = "fq" ] && echo "sch_fq"
   } >/etc/modules.d/92-v2raya-performance
 
   cat >/etc/sysctl.d/92-v2raya-performance.conf <<'EOF'
-net.core.default_qdisc=fq
+net.core.default_qdisc=__QDISC__
 net.ipv4.tcp_congestion_control=bbr
 net.ipv4.tcp_fastopen=3
 net.netfilter.nf_conntrack_tcp_be_liberal=1
 EOF
-  sysctl -p /etc/sysctl.d/92-v2raya-performance.conf >/dev/null 2>&1 || true
+  sed -i "s/__QDISC__/$qdisc/g" /etc/sysctl.d/92-v2raya-performance.conf
+  sysctl -w net.core.default_qdisc="$qdisc" >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.tcp_fastopen=3 >/dev/null 2>&1 || true
+  sysctl -w net.netfilter.nf_conntrack_tcp_be_liberal=1 >/dev/null 2>&1 || true
 
   uci -q set network.globals=globals || true
   uci -q set network.globals.packet_steering='1' || true
@@ -736,12 +753,15 @@ uci commit v2raya 2>/dev/null || true
 if [ "$ENABLE_BBR" = "1" ]; then
   modprobe tcp_bbr 2>/dev/null || true
   mkdir -p /etc/modules.d /etc/sysctl.d
+  qdisc="$(choose_qdisc)"
   echo tcp_bbr >/etc/modules.d/tcp-bbr
   cat >/etc/sysctl.d/99-bbr.conf <<'EOF'
-net.core.default_qdisc=fq
+net.core.default_qdisc=__QDISC__
 net.ipv4.tcp_congestion_control=bbr
 EOF
-  sysctl -p /etc/sysctl.d/99-bbr.conf >/dev/null 2>&1 || true
+  sed -i "s/__QDISC__/$qdisc/g" /etc/sysctl.d/99-bbr.conf
+  sysctl -w net.core.default_qdisc="$qdisc" >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
 fi
 
 disable_ipv6_runtime
