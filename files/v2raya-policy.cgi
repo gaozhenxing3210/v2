@@ -68,6 +68,41 @@ for _, s in ipairs(touch.servers or {}) do
 end
 LUA
 }
+outbound_in_use_by_others(){
+  local mac="$1" outbound="$2"
+  awk -v m="$mac" -v o="$outbound" 'BEGIN{IGNORECASE=1} !/^#/ && NF>=3 && tolower($1)!=tolower(m) && $3==o { found=1; exit } END{ exit(found?0:1) }' "$MAP" 2>/dev/null
+}
+ensure_placeholder_ref(){
+  local touch_file="$1" token="$2" placeholder_ref tmp_ph_link tmp_ph_payload
+  placeholder_ref="$(find_placeholder_ref "$touch_file")"
+  if [ -n "$placeholder_ref" ]; then
+    printf '%s' "$placeholder_ref"
+    return 0
+  fi
+  tmp_ph_link="/tmp/v2raya-placeholder-link.$$"
+  tmp_ph_payload="/tmp/v2raya-placeholder-payload.$$"
+  printf 'socks5://1.1.1.1:1#VIRTUAL-PLACEHOLDER' > "$tmp_ph_link"
+  json_payload_from_file "$tmp_ph_link" > "$tmp_ph_payload"
+  curl -fsS -m 30 -H "Content-Type: application/json" -H "Authorization: $token" --data-binary @"$tmp_ph_payload" "$V2RAYA_API/api/import" >/dev/null 2>&1 || true
+  rm -f "$tmp_ph_link" "$tmp_ph_payload"
+  curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$touch_file" 2>/dev/null || echo '{}' > "$touch_file"
+  find_placeholder_ref "$touch_file"
+}
+restore_outbound_to_placeholder(){
+  local outbound="$1" token2 tmp_touch placeholder_ref ph_typ ph_id ph_sub
+  echo "$outbound" | grep -Eq '^dev[0-9][0-9]$' || return 1
+  token2="$(api_login)"
+  [ -n "$token2" ] || return 1
+  tmp_touch="/tmp/v2raya-placeholder-touch.$$"
+  curl -fsS -m 10 -H "Authorization: $token2" "$V2RAYA_API/api/touch" > "$tmp_touch" 2>/dev/null || echo '{}' > "$tmp_touch"
+  placeholder_ref="$(ensure_placeholder_ref "$tmp_touch" "$token2")"
+  rm -f "$tmp_touch"
+  [ -n "$placeholder_ref" ] || return 1
+  ph_typ="$(echo "$placeholder_ref" | cut -d'|' -f1)"
+  ph_id="$(echo "$placeholder_ref" | cut -d'|' -f2)"
+  ph_sub="$(echo "$placeholder_ref" | cut -d'|' -f3)"
+  /usr/bin/v2raya-bind "$outbound" "$ph_id" "$ph_typ" "$ph_sub" >/dev/null 2>&1
+}
 plan_delete_nodes(){ lua - "$1" "$2" "$3" "$4" "$5" "$6" "$7" <<'LUA'
 local json = require "luci.jsonc"
 local refs, touch_path, payload_path, rebind_path = arg[1] or "", arg[2], arg[3], arg[4]
@@ -177,12 +212,19 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
   case "$action" in
     route)
       mac="$(normalize_mac "$(get_param mac "$BODY")")"; ip="$(get_param ip "$BODY")"; outbound="$(get_param outbound "$BODY")"; label="$(get_param label "$BODY" | tr ' ' '_' | sed 's/[^0-9A-Za-z._-]//g')"
-      if valid_mac "$mac" && valid_ip "$ip" && [ "$outbound" = "wan" ]; then remove_map "$mac"; "$APPLY" >/dev/null 2>&1; message="&#24050;&#35774;&#32622; $mac &#36208;&#26412;&#22320;"
+      if valid_mac "$mac" && valid_ip "$ip" && [ "$outbound" = "wan" ]; then
+        prev_outbound="$(map_outbound "$mac")"
+        remove_map "$mac"
+        if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then
+          restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true
+        fi
+        "$APPLY" >/dev/null 2>&1
+        message="&#24050;&#35774;&#32622; $mac &#36208;&#26412;&#22320;"
       elif valid_mac "$mac" && valid_ip "$ip" && valid_outbound "$outbound"; then upsert_map "$mac" "$ip" "$outbound" "${label:-device}"; "$APPLY" >/dev/null 2>&1; message="&#24050;&#35774;&#32622; $mac -> $outbound"; else message="MAC/IP/&#20986;&#21475;&#26684;&#24335;&#19981;&#23545;"; fi ;;
     wan)
-      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then remove_map "$mac"; "$APPLY" >/dev/null 2>&1; message="&#24050;&#35774;&#32622; $mac &#36208;&#26412;&#22320;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
+      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then prev_outbound="$(map_outbound "$mac")"; remove_map "$mac"; if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true; fi; "$APPLY" >/dev/null 2>&1; message="&#24050;&#35774;&#32622; $mac &#36208;&#26412;&#22320;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
     unbind_map)
-      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then remove_map "$mac"; "$APPLY" >/dev/null 2>&1; message="&#24050;&#21462;&#28040;&#35774;&#22791;&#32465;&#23450;&#65292;$mac &#24050;&#22238;&#21040;&#26412;&#22320;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
+      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then prev_outbound="$(map_outbound "$mac")"; remove_map "$mac"; if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true; fi; "$APPLY" >/dev/null 2>&1; message="&#24050;&#21462;&#28040;&#35774;&#22791;&#32465;&#23450;&#65292;$mac &#24050;&#24674;&#22797;&#33258;&#30001;&#19978;&#32593; / &#20027;&#32593;&#32476;&#30452;&#36830;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
     apply)
       "$APPLY" >/dev/null 2>&1; message="&#24050;&#37325;&#26032;&#24212;&#29992;&#35268;&#21017;" ;;
     bindout)
