@@ -5,6 +5,17 @@ GITHUB_REPO="${GITHUB_REPO:-}"
 GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
 KIT_URL="${KIT_URL:-}"
 BOOTSTRAP_TMP="${BOOTSTRAP_TMP:-/tmp/v2raya-policy-bootstrap}"
+DNS_SERVERS="${DNS_SERVERS:-223.5.5.5 119.29.29.29 1.1.1.1}"
+
+boost_dns() {
+  mkdir -p /tmp/resolv.conf.d
+  tmp_dns="/tmp/resolv.conf.d/resolv.conf.auto"
+  : > "$tmp_dns"
+  for ns in $DNS_SERVERS; do
+    printf 'nameserver %s\n' "$ns" >> "$tmp_dns"
+  done
+  ln -sf "$tmp_dns" /tmp/resolv.conf
+}
 
 download() {
   url="$1"
@@ -31,6 +42,7 @@ fi
 
 rm -rf "$BOOTSTRAP_TMP"
 mkdir -p "$BOOTSTRAP_TMP"
+boost_dns || true
 
 archive="$BOOTSTRAP_TMP/package.tar.gz"
 echo "Downloading: $KIT_URL"

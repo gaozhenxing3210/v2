@@ -5,6 +5,7 @@ REPO="${REPO:-gaozhenxing3210/v2}"
 BRANCH="${BRANCH:-main}"
 WORK_DIR="${WORK_DIR:-/tmp/v2raya-policy-onekey}"
 KIT_URL="${KIT_URL:-}"
+DNS_SERVERS="${DNS_SERVERS:-223.5.5.5 119.29.29.29 1.1.1.1}"
 
 # One-key installs start from a clean v2rayA node list by default.
 # Device MAC/IP bindings stay disabled unless explicitly requested.
@@ -40,6 +41,16 @@ PANEL_88FRP_PORT_BASE="${PANEL_88FRP_PORT_BASE:-60887}"
 PANEL_88FRP_NAME_PREFIX="${PANEL_88FRP_NAME_PREFIX:-panel}"
 export RESTORE_V2RAYA_DB RESTORE_DEVICE_MAP ENABLE_DNS_POLICY SET_ROOT_PASSWORD ROOT_PASSWORD ENABLE_BOOT_START ENABLE_BBR OPTIMIZE_ROUTER OPTIMIZE_WIFI LEAN_SERVICES DISABLE_IPV6 SET_WIFI_PASSWORD WIFI_PASSWORD OPTIMIZE_THERMAL ENABLE_88FRP FRP_VERSION FRP_SERVER_ADDR FRP_SERVER_PORT FRP_USER FRP_PROXY_NAME FRP_LOCAL_IP FRP_LOCAL_PORT FRP_REMOTE_PORT FRP_USE_ENCRYPTION FRP_USE_COMPRESSION PANEL_88FRP_SLOT PANEL_88FRP_PORT_BASE PANEL_88FRP_NAME_PREFIX
 
+boost_dns() {
+  mkdir -p /tmp/resolv.conf.d
+  tmp_dns="/tmp/resolv.conf.d/resolv.conf.auto"
+  : > "$tmp_dns"
+  for ns in $DNS_SERVERS; do
+    printf 'nameserver %s\n' "$ns" >> "$tmp_dns"
+  done
+  ln -sf "$tmp_dns" /tmp/resolv.conf
+}
+
 download() {
   url="$1"
   out="$2"
@@ -59,6 +70,7 @@ download() {
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
 archive="$WORK_DIR/v2raya-policy-kit.tar.gz"
+boost_dns || true
 
 if [ -n "$KIT_URL" ]; then
   download "$KIT_URL" "$archive"

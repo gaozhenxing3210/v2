@@ -36,6 +36,11 @@ https://github.com/gaozhenxing3210/v2
 wget -4 -O- https://cdn.jsdelivr.net/gh/gaozhenxing3210/v2@main/onekey.sh | sh
 ```
 
+最短入口，带临时 DNS 提速：
+```sh
+sh -c "$(wget -4 -qO- https://cdn.jsdelivr.net/gh/gaozhenxing3210/v2@main/go.sh)"
+```
+
 如果没有 `wget`，但有 `curl`：
 
 ```sh
