@@ -45,11 +45,11 @@ download() {
   out="$2"
   echo "Downloading: $url"
   if command -v wget >/dev/null 2>&1; then
-    wget -O "$out" "$url"
+    wget -4 --timeout=20 --tries=1 -O "$out" "$url"
     return $?
   fi
   if command -v curl >/dev/null 2>&1; then
-    curl -L -f -o "$out" "$url"
+    curl -4 -L -f --connect-timeout 20 --max-time 300 -o "$out" "$url"
     return $?
   fi
   echo "missing wget/curl; cannot download package." >&2
@@ -65,8 +65,9 @@ if [ -n "$KIT_URL" ]; then
 else
   ok=0
   for url in \
+    "https://cdn.jsdelivr.net/gh/$REPO@$BRANCH/dist/v2raya-policy-kit.tar.gz" \
     "https://raw.githubusercontent.com/$REPO/$BRANCH/dist/v2raya-policy-kit.tar.gz" \
-    "https://cdn.jsdelivr.net/gh/$REPO@$BRANCH/dist/v2raya-policy-kit.tar.gz"
+    "https://github.com/$REPO/raw/$BRANCH/dist/v2raya-policy-kit.tar.gz"
   do
     if download "$url" "$archive"; then
       ok=1

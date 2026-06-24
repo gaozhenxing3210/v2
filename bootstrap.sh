@@ -10,11 +10,11 @@ download() {
   url="$1"
   out="$2"
   if command -v wget >/dev/null 2>&1; then
-    wget -O "$out" "$url"
+    wget -4 --timeout=20 --tries=1 -O "$out" "$url"
     return $?
   fi
   if command -v curl >/dev/null 2>&1; then
-    curl -L -f -o "$out" "$url"
+    curl -4 -L -f --connect-timeout 20 --max-time 300 -o "$out" "$url"
     return $?
   fi
   echo "missing wget/curl; cannot download $url" >&2
@@ -26,7 +26,7 @@ if [ -z "$KIT_URL" ]; then
     echo "Set GITHUB_REPO=owner/repo or KIT_URL=https://.../v2raya-policy-kit.tar.gz" >&2
     exit 1
   fi
-  KIT_URL="https://github.com/$GITHUB_REPO/archive/refs/heads/$GITHUB_BRANCH.tar.gz"
+  KIT_URL="https://cdn.jsdelivr.net/gh/$GITHUB_REPO@$GITHUB_BRANCH/dist/v2raya-policy-kit.tar.gz"
 fi
 
 rm -rf "$BOOTSTRAP_TMP"
