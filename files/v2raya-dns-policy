@@ -6,9 +6,6 @@ CONF="/etc/v2raya-dns-policy.conf"
 
 : "${ENABLE_DNS_POLICY:=1}"
 : "${LAN_IF:=br-lan}"
-: "${DNS_HIJACK_PRIMARY:=119.29.29.29}"
-: "${DNS_HIJACK_SECONDARY:=114.114.114.114}"
-
 NFT="/usr/sbin/nft"
 [ -x "$NFT" ] || NFT="nft"
 IPTABLES="/usr/sbin/iptables"
@@ -20,36 +17,6 @@ COMMENT_TAG="codex-v2raya-dns-policy"
 LEGACY_CHAIN="CODEX_V2RAYA_DNS"
 LAN_IP="$(uci -q get network.lan.ipaddr 2>/dev/null || echo 192.168.1.1)"
 SOCKS_DNS_REDIRECTS="/tmp/v2raya-socks-dns.redirects.tsv"
-
-set_lan_dns_option() {
-  primary="$1"
-  secondary="$2"
-  want="6,$primary,$secondary"
-  for s in $(uci show dhcp 2>/dev/null | sed -n "s/^dhcp\.\([^.=]*\)=dhcp$/\1/p"); do
-    iface="$(uci -q get dhcp.$s.interface || true)"
-    [ "$s" = "lan" ] || [ "$iface" = "lan" ] || continue
-    tmp="$(mktemp)"
-    found=0
-    uci show dhcp.$s 2>/dev/null | sed -n "s/^dhcp\.$s\.dhcp_option='\(.*\)'$/\1/p" | while IFS= read -r opt; do
-      case "$opt" in
-        6,*) ;;
-        *) printf '%s\n' "$opt" >> "$tmp" ;;
-      esac
-    done
-    uci -q delete dhcp.$s.dhcp_option || true
-    while IFS= read -r opt; do
-      [ -n "$opt" ] || continue
-      uci add_list dhcp.$s.dhcp_option="$opt"
-      found=1
-    done < "$tmp"
-    rm -f "$tmp"
-    uci add_list dhcp.$s.dhcp_option="$want"
-    uci commit dhcp >/dev/null 2>&1 || true
-    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || /etc/init.d/dnsmasq reload >/dev/null 2>&1 || true
-    return 0
-  done
-  return 1
-}
 
 ensure_table() {
   $NFT list table "$TABLE_FAMILY" "$TABLE_NAME" >/dev/null 2>&1 || $NFT add table "$TABLE_FAMILY" "$TABLE_NAME"
@@ -82,7 +49,6 @@ if [ "$ENABLE_DNS_POLICY" != "1" ]; then
   exit 0
 fi
 
-set_lan_dns_option "$DNS_HIJACK_PRIMARY" "$DNS_HIJACK_SECONDARY" || true
 if command -v "$NFT" >/dev/null 2>&1; then
   remove_legacy_chain
   ensure_table
@@ -95,8 +61,6 @@ if command -v "$NFT" >/dev/null 2>&1; then
       $NFT add rule "$TABLE_FAMILY" "$TABLE_NAME" "$CHAIN_NAME" iifname "$LAN_IF" ip saddr "$ip" tcp dport 53 counter redirect to :"$port" comment "$COMMENT_TAG-socks"
     done < "$SOCKS_DNS_REDIRECTS"
   fi
-  $NFT add rule "$TABLE_FAMILY" "$TABLE_NAME" "$CHAIN_NAME" iifname "$LAN_IF" ip protocol udp udp dport 53 counter dnat to "$DNS_HIJACK_PRIMARY":53 comment "$COMMENT_TAG"
-  $NFT add rule "$TABLE_FAMILY" "$TABLE_NAME" "$CHAIN_NAME" iifname "$LAN_IF" tcp dport 53 counter dnat to "$DNS_HIJACK_PRIMARY":53 comment "$COMMENT_TAG"
 else
   remove_table
   ensure_legacy_chain
@@ -110,6 +74,4 @@ else
       $IPTABLES -w 2 -t nat -A "$LEGACY_CHAIN" -s "$ip" -p tcp --dport 53 -j REDIRECT --to-ports "$port"
     done < "$SOCKS_DNS_REDIRECTS"
   fi
-  $IPTABLES -w 2 -t nat -A "$LEGACY_CHAIN" -p udp --dport 53 -j DNAT --to-destination "$DNS_HIJACK_PRIMARY":53
-  $IPTABLES -w 2 -t nat -A "$LEGACY_CHAIN" -p tcp --dport 53 -j DNAT --to-destination "$DNS_HIJACK_PRIMARY":53
 fi
