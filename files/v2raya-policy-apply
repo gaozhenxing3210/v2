@@ -193,4 +193,5 @@ if [ -n "$token" ]; then
   fi
 fi
 /usr/bin/v2raya-device-policy >/dev/null 2>&1 || true
+/usr/bin/v2raya-socks-dns apply >/dev/null 2>&1 || true
 /usr/bin/v2raya-dns-policy >/dev/null 2>&1 || true

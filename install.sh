@@ -201,7 +201,7 @@ install_packages() {
   if command -v opkg >/dev/null 2>&1; then
     opkg_update_once
 
-    base_pkgs="curl jsonfilter lua luci-lib-jsonc kmod-tcp-bbr"
+    base_pkgs="curl dns2socks jsonfilter lua luci-lib-jsonc kmod-tcp-bbr"
     [ "$INSTALL_DNSMASQ_FULL" = "1" ] && base_pkgs="$base_pkgs dnsmasq-full"
     # shellcheck disable=SC2086
     install_opkg_packages $base_pkgs || true
@@ -797,6 +797,7 @@ for f in \
   files/v2raya-policy-apply \
   files/v2raya-device-policy \
   files/v2raya-dns-policy \
+  files/v2raya-socks-dns \
   files/v2raya-sync-auth \
   files/v2raya-policy-boot \
   files/v2raya-bind \
@@ -820,6 +821,7 @@ cp files/v2raya-policy.cgi /www/cgi-bin/v2raya-policy
 cp files/v2raya-policy-apply /usr/bin/v2raya-policy-apply
 cp files/v2raya-device-policy /usr/bin/v2raya-device-policy
 cp files/v2raya-dns-policy /usr/bin/v2raya-dns-policy
+cp files/v2raya-socks-dns /usr/bin/v2raya-socks-dns
 cp files/v2raya-sync-auth /usr/bin/v2raya-sync-auth
 cp files/v2raya-policy-boot /etc/init.d/v2raya-policy-boot
 cp files/v2raya-bind /usr/bin/v2raya-bind
@@ -844,7 +846,7 @@ else
   printf 'Status: 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n\r\nNot Found\n'
 fi
 EOF
-chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-sync-auth /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy /etc/init.d/v2raya-policy-boot
+chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-socks-dns /usr/bin/v2raya-sync-auth /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy /etc/init.d/v2raya-policy-boot
 chmod +x /www-v2raya-policy/cgi-bin/luci
 
 echo "[4/8] writing auth and device map"

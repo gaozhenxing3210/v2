@@ -7,7 +7,6 @@ local routing_txt = "/tmp/v2raya-policy.routing.txt"
 local allow_file = "/tmp/v2raya-policy.allow-macs"
 local count_file = "/tmp/v2raya-policy.active-count"
 local host_sync_file = "/tmp/v2raya-policy.hosts.tsv"
-local v2raya_config_file = "/etc/v2raya/config.json"
 
 local function trim(s) return (s or ""):gsub("^%s+", ""):gsub("%s+$", "") end
 local function norm_mac(s) return trim(s):lower():gsub("[^0-9a-f:]", "") end
@@ -65,18 +64,6 @@ local function lan_cidr()
   return num_to_ip(network) .. "/" .. tostring(prefix)
 end
 
-local outbound_protocols = {}
-do
-  local cfg = json.parse(readfile(v2raya_config_file) or "") or {}
-  for _, ob in ipairs(cfg.outbounds or {}) do
-    local tag = trim(ob.tag)
-    local proto = trim(ob.protocol):lower()
-    if tag ~= "" and proto ~= "" then
-      outbound_protocols[tag] = proto
-    end
-  end
-end
-
 local leases = {}
 for line in readfile(lease_file):gmatch("[^\n]+") do
   local exp, mac, ip, name = line:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
@@ -111,14 +98,6 @@ table.insert(routing, "# Managed by local v2rayA device policy panel.")
 table.insert(routing, "# Device source IP -> v2rayA outbound slot.")
 table.insert(routing, "default: direct")
 table.insert(routing, "")
-for _, e in ipairs(entries) do
-  if outbound_protocols[e.outbound] == "socks" then
-    table.insert(routing, string.format("source(%s/32) && port(53) -> direct", e.ip))
-  end
-end
-if #entries > 0 then
-  table.insert(routing, "")
-end
 for _, e in ipairs(entries) do
   table.insert(routing, string.format("source(%s/32) -> %s", e.ip, e.outbound))
 end

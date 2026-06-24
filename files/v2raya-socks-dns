@@ -1,0 +1,169 @@
+#!/bin/sh
+set -eu
+
+AUTH="/etc/v2raya-policy.auth"
+[ -f "$AUTH" ] && . "$AUTH"
+
+: "${SOCKS_DNS_UPSTREAM:=1.1.1.1:53}"
+: "${SOCKS_DNS_LISTEN_BASE:=53000}"
+
+CONFIG="/etc/v2raya/config.json"
+MAP="/etc/v2raya-policy.map"
+LEASE="/tmp/dhcp.leases"
+RUN_DIR="/var/run/v2raya-socks-dns"
+REDIRECTS="/tmp/v2raya-socks-dns.redirects.tsv"
+TARGETS="/tmp/v2raya-socks-dns.targets.$$"
+
+trap 'rm -f "$TARGETS"' EXIT
+
+generate_targets() {
+  lua - "$CONFIG" "$MAP" "$LEASE" "$SOCKS_DNS_LISTEN_BASE" <<'LUA'
+local json = require "luci.jsonc"
+local config_path, map_path, lease_path, listen_base = arg[1], arg[2], arg[3], tonumber(arg[4] or "53000") or 53000
+
+local function readfile(path)
+  local f = io.open(path, "r")
+  if not f then return "" end
+  local s = f:read("*a") or ""
+  f:close()
+  return s
+end
+
+local function trim(s)
+  return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function norm_mac(s)
+  return trim(s):lower():gsub("[^0-9a-f:]", "")
+end
+
+local function valid_ip(ip)
+  return trim(ip):match("^%d+%.%d+%.%d+%.%d+$") ~= nil
+end
+
+local cfg = json.parse(readfile(config_path)) or {}
+local outbounds = {}
+for _, ob in ipairs(cfg.outbounds or {}) do
+  local tag = trim(ob.tag)
+  local proto = trim(ob.protocol):lower()
+  local server = (((ob.settings or {}).servers or {})[1] or {})
+  if tag ~= "" and proto == "socks" then
+    outbounds[tag] = {
+      host = trim(server.address),
+      port = tostring(server.port or ""),
+      user = trim((((server.users or {})[1] or {}).user)),
+      pass = trim((((server.users or {})[1] or {}).pass)),
+    }
+  end
+end
+
+local leases = {}
+for line in readfile(lease_path):gmatch("[^\n]+") do
+  local _, mac, ip = line:match("^(%S+)%s+(%S+)%s+(%S+)")
+  mac = norm_mac(mac)
+  if mac ~= "" and valid_ip(ip) then
+    leases[mac] = ip
+  end
+end
+
+for line in readfile(map_path):gmatch("[^\n]+") do
+  line = trim((line:gsub("#.*$", "")))
+  if line ~= "" then
+    local mac, ip, outbound = line:match("^(%S+)%s+(%S+)%s+(%S+)")
+    mac = norm_mac(mac)
+    ip = trim(ip)
+    outbound = trim(outbound)
+    if leases[mac] and valid_ip(leases[mac]) then
+      ip = leases[mac]
+    end
+    local ob = outbounds[outbound]
+    local idx = tonumber((outbound:match("^dev(%d%d)$") or ""))
+    if ob and idx and valid_ip(ip) and ob.host ~= "" and ob.port:match("^%d+$") and not ob.host:match("^1%.1%.1%.1$") then
+      local listen_port = listen_base + idx
+      io.write(table.concat({
+        mac,
+        ip,
+        outbound,
+        tostring(listen_port),
+        ob.host,
+        ob.port,
+        ob.user,
+        ob.pass,
+      }, "\t"))
+      io.write("\n")
+    end
+  end
+end
+LUA
+}
+
+stop_all() {
+  if [ -d "$RUN_DIR" ]; then
+    for pidfile in "$RUN_DIR"/*.pid; do
+      [ -f "$pidfile" ] || continue
+      pid="$(cat "$pidfile" 2>/dev/null || true)"
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        sleep 1
+        kill -9 "$pid" 2>/dev/null || true
+      fi
+      rm -f "$pidfile"
+    done
+  fi
+  rm -f "$REDIRECTS"
+}
+
+start_all() {
+  command -v dns2socks >/dev/null 2>&1 || {
+    echo "dns2socks not installed" >&2
+    exit 1
+  }
+
+  mkdir -p "$RUN_DIR"
+  generate_targets > "$TARGETS"
+  stop_all
+
+  [ -s "$TARGETS" ] || return 0
+
+  awk -F '\t' '!seen[$3]++ {print $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8}' "$TARGETS" |
+  while IFS="$(printf '\t')" read -r outbound listen_port host port user pass; do
+    [ -n "$outbound" ] || continue
+    log_file="/tmp/v2raya-socks-dns-$outbound.log"
+    if [ -n "$user" ] || [ -n "$pass" ]; then
+      dns2socks /q "/u:$user" "/p:$pass" "$host:$port" "$SOCKS_DNS_UPSTREAM" "127.0.0.1:$listen_port" >"$log_file" 2>&1 &
+    else
+      dns2socks /q "$host:$port" "$SOCKS_DNS_UPSTREAM" "127.0.0.1:$listen_port" >"$log_file" 2>&1 &
+    fi
+    echo $! > "$RUN_DIR/$outbound.pid"
+  done
+
+  awk -F '\t' '{print $2 "\t" $4}' "$TARGETS" > "$REDIRECTS"
+}
+
+status_all() {
+  echo "redirects:"
+  cat "$REDIRECTS" 2>/dev/null || true
+  echo "pids:"
+  if [ -d "$RUN_DIR" ]; then
+    for pidfile in "$RUN_DIR"/*.pid; do
+      [ -f "$pidfile" ] || continue
+      printf '%s %s\n' "$(basename "$pidfile" .pid)" "$(cat "$pidfile" 2>/dev/null || true)"
+    done
+  fi
+}
+
+case "${1:-apply}" in
+  apply|start|reload|restart)
+    start_all
+    ;;
+  stop)
+    stop_all
+    ;;
+  status)
+    status_all
+    ;;
+  *)
+    echo "usage: $0 [apply|start|reload|restart|stop|status]" >&2
+    exit 1
+    ;;
+esac
