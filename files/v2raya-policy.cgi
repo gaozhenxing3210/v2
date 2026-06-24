@@ -1,5 +1,6 @@
 #!/bin/sh
 MAP="/etc/v2raya-policy.map"
+BIND_FILE="/etc/v2raya-policy.bindings"
 LEASES="/tmp/dhcp.leases"
 APPLY="/usr/bin/v2raya-policy-apply"
 AUTH="/etc/v2raya-policy.auth"
@@ -18,6 +19,43 @@ valid_outbound(){ echo "$1" | grep -Eq '^(proxy|dev[0-9][0-9])$'; }
 map_outbound(){ awk -v m="$1" '!/^#/ && tolower($1)==m {print $3; exit}' "$MAP" 2>/dev/null; }
 remove_map(){ local mac="$1"; tmp="$MAP.$$"; awk -v m="$mac" 'BEGIN{IGNORECASE=1} /^#/ || NF<3 || tolower($1)!=m {print}' "$MAP" 2>/dev/null > "$tmp"; mv "$tmp" "$MAP"; }
 upsert_map(){ local mac="$1" ip="$2" outbound="$3" label="$4"; mkdir -p /etc; touch "$MAP"; remove_map "$mac"; printf '%s %s %s %s\n' "$mac" "$ip" "$outbound" "$label" >> "$MAP"; }
+remove_outbound_binding(){
+  local outbound="$1" tmp="$BIND_FILE.$$"
+  mkdir -p /etc
+  touch "$BIND_FILE"
+  awk -v o="$outbound" 'BEGIN{IGNORECASE=1} /^#/ || NF<4 || $1!=o {print}' "$BIND_FILE" 2>/dev/null > "$tmp"
+  mv "$tmp" "$BIND_FILE"
+}
+save_outbound_binding(){
+  local outbound="$1" typ="$2" id="$3" sub="$4"
+  echo "$outbound" | grep -Eq '^dev[0-9][0-9]$' || return 0
+  echo "$id" | grep -Eq '^[0-9]+$' || return 1
+  echo "$sub" | grep -Eq '^[0-9]+$' || return 1
+  echo "$typ" | grep -Eq '^(server|subscriptionServer)$' || return 1
+  remove_outbound_binding "$outbound"
+  printf '%s\t%s\t%s\t%s\n' "$outbound" "$typ" "$id" "$sub" >> "$BIND_FILE"
+}
+remove_bindings_by_refs(){
+  local refs="$1" tmp="$BIND_FILE.$$"
+  [ -f "$BIND_FILE" ] || return 0
+  awk -v refs="$refs" '
+    BEGIN{
+      n=split(refs, arr, ",")
+      for(i=1;i<=n;i++){
+        split(arr[i], p, "|")
+        if((p[1]=="server" || p[1]=="subscriptionServer") && p[2]!=""){
+          del[p[1] "|" p[2] "|" (p[3] ? p[3] : 0)] = 1
+        }
+      }
+    }
+    /^#/ || NF<4 { print; next }
+    {
+      key = $2 "|" $3 "|" $4
+      if(!(key in del)) print
+    }
+  ' "$BIND_FILE" > "$tmp"
+  mv "$tmp" "$BIND_FILE"
+}
 api_login(){
   tmp_login="/tmp/v2raya-login.$$"
   lua - "$V2RAYA_USER" "$V2RAYA_PASS" > "$tmp_login" <<'LUA'
@@ -406,6 +444,7 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
         fi
         bootstrap_bind_runtime "$outbound" "$typ" "$id" "$sub" >/dev/null 2>&1 || true
         if /usr/bin/v2raya-bind "$outbound" "$id" "$typ" "$sub" >/dev/null 2>&1; then
+          save_outbound_binding "$outbound" "$typ" "$id" "$sub" >/dev/null 2>&1 || true
           [ -n "$token2" ] && start_runtime_if_possible "$token2" >/dev/null 2>&1 || true
           if echo "$outbound" | grep -Eq '^dev[0-9][0-9]$' && [ "$previous_ref" != "$ref" ]; then
             restart_bind_runtime_async
@@ -431,6 +470,7 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
           rm -f "$tmp_delete"
           code="$(printf "%s" "$resp" | jsonfilter -q -e "@.code" 2>/dev/null || true)"
           if [ "$code" = "SUCCESS" ]; then
+            remove_bindings_by_refs "$ref" >/dev/null 2>&1 || true
             message="&#24050;&#21024;&#38500;&#33410;&#28857; ID$id"
           else
             msg="$(printf "%s" "$resp" | jsonfilter -q -e "@.message" 2>/dev/null || true)"
@@ -494,6 +534,7 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
               resp="$(curl -fsS -m 30 -X DELETE -H "Content-Type: application/json" -H "Authorization: $token2" --data-binary @"$tmp_delete" "$V2RAYA_API/api/touch" 2>/dev/null || true)"
               code="$(printf "%s" "$resp" | jsonfilter -q -e "@.code" 2>/dev/null || true)"
               if [ "$code" = "SUCCESS" ]; then
+                remove_bindings_by_refs "$delete_refs" >/dev/null 2>&1 || true
                 message="&#24050;&#21024;&#38500;&#21246;&#36873;&#30340;&#20195;&#29702;&#33410;&#28857;&#65292;&#24050;&#30452;&#25509;&#29983;&#25928;"
                 [ "$rebind_count" -gt 0 ] && message="$message<br>&#24050;&#20808;&#25226; $rebind_count &#20010;&#20986;&#21475;&#20999;&#21040; 1.1.1.1 &#34394;&#25311;&#21344;&#20301;"
               else

@@ -25,8 +25,11 @@ EOF
     /etc/init.d/uhttpd enable >/dev/null 2>&1 || true
     /etc/init.d/uhttpd restart >/dev/null 2>&1 || /etc/init.d/uhttpd start >/dev/null 2>&1 || true
     /usr/bin/v2raya-policy-apply >/tmp/v2raya-policy-boot.log 2>&1 || true
+    /usr/bin/v2raya-ensure-bindings --quiet >>/tmp/v2raya-policy-boot.log 2>&1 || true
     /usr/bin/v2raya-device-policy >>/tmp/v2raya-policy-boot.log 2>&1 || true
     /usr/bin/v2raya-dns-policy >>/tmp/v2raya-policy-boot.log 2>&1 || true
     /usr/bin/v2raya-socks-compat stop >>/tmp/v2raya-policy-boot.log 2>&1 || true
+    /etc/init.d/v2raya-bind-watchdog enable >/dev/null 2>&1 || true
+    /etc/init.d/v2raya-bind-watchdog restart >/dev/null 2>&1 || /etc/init.d/v2raya-bind-watchdog start >/dev/null 2>&1 || true
   ) &
 }

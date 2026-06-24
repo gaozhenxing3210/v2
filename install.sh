@@ -842,6 +842,8 @@ for f in \
   files/v2raya-socks-dns-proxy.lua \
   files/v2raya-sync-auth \
   files/v2raya-policy-boot \
+  files/v2raya-ensure-bindings \
+  files/v2raya-bind-watchdog \
   files/v2raya-bind \
   files/v2raya-import-lines \
   files/v2raya-bind-html.lua \
@@ -870,6 +872,8 @@ cp files/v2raya-socks-dns /usr/bin/v2raya-socks-dns
 cp files/v2raya-socks-dns-proxy.lua /usr/libexec/v2raya-socks-dns-proxy.lua
 cp files/v2raya-sync-auth /usr/bin/v2raya-sync-auth
 cp files/v2raya-policy-boot /etc/init.d/v2raya-policy-boot
+cp files/v2raya-ensure-bindings /usr/bin/v2raya-ensure-bindings
+cp files/v2raya-bind-watchdog /etc/init.d/v2raya-bind-watchdog
 cp files/v2raya-bind /usr/bin/v2raya-bind
 cp files/v2raya-import-lines /usr/bin/v2raya-import-lines
 cp files/v2raya-bind-html.lua /usr/libexec/v2raya-bind-html.lua
@@ -892,7 +896,7 @@ else
   printf 'Status: 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n\r\nNot Found\n'
 fi
 EOF
-chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-socks-compat /usr/bin/v2raya-socks-dns /usr/bin/v2raya-sync-auth /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy /etc/init.d/v2raya-policy-boot
+chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-socks-compat /usr/bin/v2raya-socks-dns /usr/bin/v2raya-sync-auth /usr/bin/v2raya-ensure-bindings /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy /etc/init.d/v2raya-policy-boot /etc/init.d/v2raya-bind-watchdog
 chmod +x /www-v2raya-policy/cgi-bin/luci
 
 echo "[4/8] writing auth and device map"
@@ -951,6 +955,7 @@ install_frpc_runtime
 
 if [ "$ENABLE_BOOT_START" = "1" ]; then
   /etc/init.d/v2raya-policy-boot enable >/dev/null 2>&1 || true
+  /etc/init.d/v2raya-bind-watchdog enable >/dev/null 2>&1 || true
 fi
 
 ensure_uhttpd_8088 || {
@@ -1002,8 +1007,10 @@ ensure_v2ray_runtime || true
 
 echo "[6/8] applying policy logic"
 /usr/bin/v2raya-policy-apply >/tmp/v2raya-policy-install-apply.log 2>&1 || true
+/usr/bin/v2raya-ensure-bindings >/tmp/v2raya-policy-install-bindings.log 2>&1 || true
 /usr/bin/v2raya-device-policy >/tmp/v2raya-policy-install-device.log 2>&1 || true
 /usr/bin/v2raya-dns-policy >/tmp/v2raya-policy-install-dns.log 2>&1 || true
+/etc/init.d/v2raya-bind-watchdog restart >/dev/null 2>&1 || /etc/init.d/v2raya-bind-watchdog start >/dev/null 2>&1 || true
 
 echo "[7/8] verifying"
 echo "LAN IP: $(lan_ip)"

@@ -1,0 +1,201 @@
+#!/bin/sh
+set -eu
+
+AUTH="/etc/v2raya-policy.auth"
+[ -f "$AUTH" ] && . "$AUTH"
+: "${V2RAYA_API:=http://127.0.0.1:2017}"
+: "${V2RAYA_USER:=admin}"
+: "${V2RAYA_PASS:=weifeng}"
+MAP="/etc/v2raya-policy.map"
+BIND_FILE="/etc/v2raya-policy.bindings"
+LOCK="/tmp/v2raya-ensure-bindings.lock"
+LOG="/tmp/v2raya-ensure-bindings.log"
+QUIET=0
+[ "${1:-}" = "--quiet" ] && QUIET=1
+
+log() {
+  local line="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+  echo "$line" >> "$LOG"
+  [ "$QUIET" = "1" ] || echo "$line"
+}
+
+port_listening() {
+  local port="$1"
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" { found=1 } END { exit(found ? 0 : 1) }'
+    return $?
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" { found=1 } END { exit(found ? 0 : 1) }'
+    return $?
+  fi
+  return 1
+}
+
+cleanup() {
+  rm -rf "$LOCK"
+  rm -f /tmp/v2raya-ensure-login.$$ /tmp/v2raya-ensure-touch.$$ /tmp/v2raya-ensure-after.$$ /tmp/v2raya-ensure-seed.$$ /tmp/v2raya-ensure-outbound.$$
+}
+trap cleanup EXIT INT TERM
+
+if ! mkdir "$LOCK" 2>/dev/null; then
+  exit 0
+fi
+
+api_login() {
+  local tmp_login="/tmp/v2raya-ensure-login.$$"
+  lua - "$V2RAYA_USER" "$V2RAYA_PASS" > "$tmp_login" <<'LUA'
+local json = require "luci.jsonc"
+print(json.stringify({ username = arg[1] or "", password = arg[2] or "" }))
+LUA
+  login_json="$(curl -fsS -m 10 -H 'Content-Type: application/json' --data-binary @"$tmp_login" "$V2RAYA_API/api/login" 2>/dev/null || true)"
+  rm -f "$tmp_login"
+  printf '%s' "$login_json" | jsonfilter -q -e '@.data.token' 2>/dev/null || true
+}
+
+api_create_outbound() {
+  local token="$1" outbound="$2" tmp_outbound
+  [ -n "$token" ] || return 1
+  [ -n "$outbound" ] || return 1
+  tmp_outbound="/tmp/v2raya-ensure-outbound.$$"
+  lua - "$outbound" > "$tmp_outbound" <<'LUA'
+local json = require "luci.jsonc"
+print(json.stringify({ outbound = arg[1] or "" }))
+LUA
+  curl -fsS -m 15 -H "Content-Type: application/json" -H "Authorization: $token" --data-binary @"$tmp_outbound" "$V2RAYA_API/api/outbound" >/dev/null 2>&1 || true
+  rm -f "$tmp_outbound"
+}
+
+touch_running_state() {
+  jsonfilter -q -i "$1" -e '@.data.running' 2>/dev/null || true
+}
+
+find_connected_ref() {
+  lua - "$1" "$2" <<'LUA'
+local json = require "luci.jsonc"
+local f = io.open(arg[1], "r")
+local obj = json.parse(f and f:read("*a") or "{}") or {}
+if f then f:close() end
+local outbound = arg[2] or ""
+local touch = obj.data and obj.data.touch or {}
+for _, c in ipairs(touch.connectedServer or {}) do
+  if tostring(c.outbound or "") == outbound then
+    print(tostring(c._type or "server") .. "|" .. tostring(c.id or "") .. "|" .. tostring(c.sub or 0))
+    return
+  end
+end
+LUA
+}
+
+seed_bindings_from_runtime() {
+  local touch_file="$1"
+  local tmp_seed="/tmp/v2raya-ensure-seed.$$"
+  : > "$tmp_seed"
+  awk '!/^#/ && NF>=3 && $3 ~ /^dev[0-9][0-9]$/ { print $3 }' "$MAP" 2>/dev/null | sort -u | while read outbound; do
+    [ -n "$outbound" ] || continue
+    ref="$(find_connected_ref "$touch_file" "$outbound" || true)"
+    case "$ref" in
+      server\|*|subscriptionServer\|*)
+        typ="$(echo "$ref" | cut -d'|' -f1)"
+        id="$(echo "$ref" | cut -d'|' -f2)"
+        sub="$(echo "$ref" | cut -d'|' -f3)"
+        if [ -n "$id" ] && [ "$id" != "0" ]; then
+          printf '%s\t%s\t%s\t%s\n' "$outbound" "$typ" "$id" "$sub" >> "$tmp_seed"
+        fi
+      ;;
+    esac
+  done
+  if [ -s "$tmp_seed" ]; then
+    touch "$BIND_FILE"
+    while IFS="$(printf '\t')" read outbound typ id sub; do
+      grep -Eq "^${outbound}[[:space:]]+" "$BIND_FILE" 2>/dev/null && continue
+      printf '%s\t%s\t%s\t%s\n' "$outbound" "$typ" "$id" "$sub" >> "$BIND_FILE"
+      log "seed binding: $outbound -> $typ|$id|$sub"
+    done < "$tmp_seed"
+  fi
+  rm -f "$tmp_seed"
+}
+
+start_runtime_if_needed() {
+  local token="$1" touch_file="$2" running
+  running="$(touch_running_state "$touch_file")"
+  [ "$running" = "true" ] && return 0
+  curl -fsS -m 20 -X POST -H "Authorization: $token" "$V2RAYA_API/api/v2ray" >/dev/null 2>&1 || true
+}
+
+relogin_and_touch() {
+  token="$(api_login)"
+  [ -n "$token" ] || return 1
+  touch_file="$1"
+  curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$touch_file" 2>/dev/null || echo '{}' > "$touch_file"
+  start_runtime_if_needed "$token" "$touch_file"
+  curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$touch_file" 2>/dev/null || echo '{}' > "$touch_file"
+  return 0
+}
+
+restart_stack() {
+  /etc/init.d/v2raya restart >/dev/null 2>&1 || /etc/init.d/v2raya start >/dev/null 2>&1 || true
+  i=0
+  while [ "$i" -lt 25 ]; do
+    port_listening 2017 && return 0
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+touch "$BIND_FILE"
+touch_file="/tmp/v2raya-ensure-touch.$$"
+after_touch="/tmp/v2raya-ensure-after.$$"
+
+if ! relogin_and_touch "$touch_file"; then
+  log "skip: login failed"
+  exit 0
+fi
+
+seed_bindings_from_runtime "$touch_file"
+[ -s "$BIND_FILE" ] || exit 0
+
+changed=0
+while IFS="$(printf '\t')" read outbound typ id sub rest; do
+  [ -n "${outbound:-}" ] || continue
+  case "$outbound" in \#*) continue ;; esac
+  echo "$outbound" | grep -Eq '^dev[0-9][0-9]$' || continue
+  echo "$typ" | grep -Eq '^(server|subscriptionServer)$' || continue
+  echo "$id" | grep -Eq '^[0-9]+$' || continue
+  echo "$sub" | grep -Eq '^[0-9]+$' || sub=0
+  current_ref="$(find_connected_ref "$touch_file" "$outbound" || true)"
+  desired_ref="$typ|$id|$sub"
+  [ "$current_ref" = "$desired_ref" ] && continue
+  api_create_outbound "$token" "$outbound"
+  if /usr/bin/v2raya-bind "$outbound" "$id" "$typ" "$sub" >/dev/null 2>&1; then
+    changed=1
+    log "rebind: $outbound $current_ref -> $desired_ref"
+    curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$touch_file" 2>/dev/null || echo '{}' > "$touch_file"
+  else
+    log "rebind failed: $outbound -> $desired_ref"
+  fi
+done < "$BIND_FILE"
+
+if [ "$changed" = "1" ]; then
+  restart_stack || log "warn: 2017 not ready after restart"
+  if relogin_and_touch "$after_touch"; then
+    while IFS="$(printf '\t')" read outbound typ id sub rest; do
+      [ -n "${outbound:-}" ] || continue
+      case "$outbound" in \#*) continue ;; esac
+      echo "$outbound" | grep -Eq '^dev[0-9][0-9]$' || continue
+      echo "$typ" | grep -Eq '^(server|subscriptionServer)$' || continue
+      echo "$id" | grep -Eq '^[0-9]+$' || continue
+      echo "$sub" | grep -Eq '^[0-9]+$' || sub=0
+      current_ref="$(find_connected_ref "$after_touch" "$outbound" || true)"
+      desired_ref="$typ|$id|$sub"
+      [ "$current_ref" = "$desired_ref" ] && continue
+      /usr/bin/v2raya-bind "$outbound" "$id" "$typ" "$sub" >/dev/null 2>&1 || true
+    done < "$BIND_FILE"
+  fi
+  /usr/bin/v2raya-policy-apply >/dev/null 2>&1 || true
+  /usr/bin/v2raya-device-policy >/dev/null 2>&1 || true
+  /usr/bin/v2raya-dns-policy >/dev/null 2>&1 || true
+fi
+
+exit 0
