@@ -5,8 +5,8 @@ AUTH="/etc/v2raya-policy.auth"
 : "${V2RAYA_API:=http://127.0.0.1:2017}"
 : "${V2RAYA_USER:=admin}"
 : "${V2RAYA_PASS:=weifeng}"
-: "${DNS_HIJACK_PRIMARY:=1.1.1.1}"
-: "${DNS_HIJACK_SECONDARY:=8.8.8.8}"
+: "${DNS_HIJACK_PRIMARY:=119.29.29.29}"
+: "${DNS_HIJACK_SECONDARY:=114.114.114.114}"
 MAP="/etc/v2raya-policy.map"
 HOST_SYNC="/tmp/v2raya-policy.hosts.tsv"
 /usr/libexec/v2raya-policy-build.lua
@@ -195,4 +195,3 @@ fi
 /usr/bin/v2raya-device-policy >/dev/null 2>&1 || true
 /usr/bin/v2raya-socks-dns apply >/dev/null 2>&1 || true
 /usr/bin/v2raya-dns-policy >/dev/null 2>&1 || true
-/usr/bin/v2raya-socks-compat apply >/dev/null 2>&1 || true

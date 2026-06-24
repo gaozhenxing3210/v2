@@ -6,8 +6,8 @@ CONF="/etc/v2raya-dns-policy.conf"
 
 : "${ENABLE_DNS_POLICY:=1}"
 : "${LAN_IF:=br-lan}"
-: "${DNS_HIJACK_PRIMARY:=1.1.1.1}"
-: "${DNS_HIJACK_SECONDARY:=8.8.8.8}"
+: "${DNS_HIJACK_PRIMARY:=119.29.29.29}"
+: "${DNS_HIJACK_SECONDARY:=114.114.114.114}"
 
 NFT="/usr/sbin/nft"
 [ -x "$NFT" ] || NFT="nft"
