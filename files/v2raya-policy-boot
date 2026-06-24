@@ -27,5 +27,6 @@ EOF
     /usr/bin/v2raya-policy-apply >/tmp/v2raya-policy-boot.log 2>&1 || true
     /usr/bin/v2raya-device-policy >>/tmp/v2raya-policy-boot.log 2>&1 || true
     /usr/bin/v2raya-dns-policy >>/tmp/v2raya-policy-boot.log 2>&1 || true
+    /usr/bin/v2raya-socks-compat >>/tmp/v2raya-policy-boot.log 2>&1 || true
   ) &
 }
