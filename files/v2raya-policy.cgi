@@ -86,6 +86,58 @@ LUA
 touch_running_state(){
   jsonfilter -q -i "$1" -e '@.data.running' 2>/dev/null || true
 }
+port_listening() {
+  local port="$1"
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" { found=1 } END { exit(found ? 0 : 1) }'
+    return $?
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" { found=1 } END { exit(found ? 0 : 1) }'
+    return $?
+  fi
+  return 1
+}
+restart_bind_runtime_async() {
+  local script="/tmp/v2raya-bind-runtime.$$.$RANDOM.sh"
+  cat >"$script" <<'SH'
+#!/bin/sh
+log="/tmp/v2raya-bind-runtime.log"
+port_listening() {
+  port="$1"
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" { found=1 } END { exit(found ? 0 : 1) }'
+    return $?
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" { found=1 } END { exit(found ? 0 : 1) }'
+    return $?
+  fi
+  return 1
+}
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] restart_bind_runtime_async: begin" >>"$log"
+sleep 1
+/etc/init.d/v2raya restart >>"$log" 2>&1 || /etc/init.d/v2raya start >>"$log" 2>&1 || true
+i=0
+while [ "$i" -lt 20 ]; do
+  port_listening 2017 && break
+  sleep 1
+  i=$((i + 1))
+done
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] restart_bind_runtime_async: 2017 ready=$([ "$i" -lt 20 ] && echo yes || echo no)" >>"$log"
+/usr/bin/v2raya-policy-apply >>"$log" 2>&1 || true
+/usr/bin/v2raya-device-policy >>"$log" 2>&1 || true
+/usr/bin/v2raya-dns-policy >>"$log" 2>&1 || true
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] restart_bind_runtime_async: done" >>"$log"
+rm -f "$0"
+SH
+  chmod 0755 "$script"
+  if command -v nohup >/dev/null 2>&1; then
+    nohup sh "$script" >/dev/null 2>&1 &
+  else
+    sh "$script" >/dev/null 2>&1 &
+  fi
+}
 bootstrap_bind_runtime(){
   local outbound="$1" typ="$2" id="$3" sub="$4" token2 tmp_touch proxy_ref proxy_placeholder running
   token2="$(api_login)"
@@ -344,11 +396,23 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
       if valid_outbound "$outbound" && [ "$ref" = "virtual|0|0" ]; then
         message="$outbound &#24403;&#21069;&#26159; 1.1.1.1 &#34394;&#25311;&#21344;&#20301;&#65292;&#21518;&#21488;&#31574;&#30053;&#19981;&#21464;"
       elif valid_outbound "$outbound" && echo "$id" | grep -Eq '^[0-9]+$' && echo "$sub" | grep -Eq '^[0-9]+$' && echo "$typ" | grep -Eq '^(server|subscriptionServer)$'; then
+        previous_ref=""
+        token2="$(api_login)"
+        if [ -n "$token2" ]; then
+          tmp_touch="/tmp/v2raya-switch-touch.$$"
+          curl -fsS -m 10 -H "Authorization: $token2" "$V2RAYA_API/api/touch" > "$tmp_touch" 2>/dev/null || echo '{}' > "$tmp_touch"
+          previous_ref="$(find_connected_ref "$tmp_touch" "$outbound" || true)"
+          rm -f "$tmp_touch"
+        fi
         bootstrap_bind_runtime "$outbound" "$typ" "$id" "$sub" >/dev/null 2>&1 || true
         if /usr/bin/v2raya-bind "$outbound" "$id" "$typ" "$sub" >/dev/null 2>&1; then
-          token2="$(api_login)"
           [ -n "$token2" ] && start_runtime_if_possible "$token2" >/dev/null 2>&1 || true
-          message="&#24050;&#32465;&#23450; $outbound -> ID$id"
+          if echo "$outbound" | grep -Eq '^dev[0-9][0-9]$' && [ "$previous_ref" != "$ref" ]; then
+            restart_bind_runtime_async
+            message="&#24050;&#32465;&#23450; $outbound -> ID$id&#65292;&#27491;&#22312;&#20999;&#25442;&#33410;&#28857;&#65292;&#32422; 5-10 &#31186;&#24674;&#22797;"
+          else
+            message="&#24050;&#32465;&#23450; $outbound -> ID$id"
+          fi
           bind_ok="$outbound"
         else
           message="&#32465;&#23450;&#22833;&#36133;&#65292;&#35831;&#26816;&#26597; ID &#26159;&#21542;&#23384;&#22312;"
