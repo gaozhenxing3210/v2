@@ -11,6 +11,7 @@ AUTH="/etc/v2raya-policy.auth"
 
 CONFIG="/etc/v2raya/config.json"
 MAP="/etc/v2raya-policy.map"
+DNSMODE="/etc/v2raya-policy.dnsmode"
 LEASE="/tmp/dhcp.leases"
 RUN_DIR="/var/run/v2raya-socks-dns"
 REDIRECTS="/tmp/v2raya-socks-dns.redirects.tsv"
@@ -20,9 +21,9 @@ PROXY_LUA="/usr/libexec/v2raya-socks-dns-proxy.lua"
 trap 'rm -f "$TARGETS"' EXIT
 
 generate_targets() {
-  lua - "$CONFIG" "$MAP" "$LEASE" "$SOCKS_DNS_LISTEN_BASE" <<'LUA'
+  lua - "$CONFIG" "$MAP" "$DNSMODE" "$LEASE" "$SOCKS_DNS_LISTEN_BASE" <<'LUA'
 local json = require "luci.jsonc"
-local config_path, map_path, lease_path, listen_base = arg[1], arg[2], arg[3], tonumber(arg[4] or "53000") or 53000
+local config_path, map_path, mode_path, lease_path, listen_base = arg[1], arg[2], arg[3], arg[4], tonumber(arg[5] or "53000") or 53000
 
 local function readfile(path)
   local f = io.open(path, "r")
@@ -69,6 +70,19 @@ for line in readfile(lease_path):gmatch("[^\n]+") do
   end
 end
 
+local dns_modes = {}
+for line in readfile(mode_path):gmatch("[^\n]+") do
+  line = trim((line:gsub("#.*$", "")))
+  if line ~= "" then
+    local mac, mode = line:match("^(%S+)%s+(%S+)")
+    mac = norm_mac(mac)
+    mode = trim(mode)
+    if mac ~= "" and mode ~= "" then
+      dns_modes[mac] = mode
+    end
+  end
+end
+
 for line in readfile(map_path):gmatch("[^\n]+") do
   line = trim((line:gsub("#.*$", "")))
   if line ~= "" then
@@ -81,7 +95,7 @@ for line in readfile(map_path):gmatch("[^\n]+") do
     end
     local ob = outbounds[outbound]
     local idx = tonumber((outbound:match("^dev(%d%d)$") or ""))
-    if ob and idx and valid_ip(ip) and ob.host ~= "" and ob.port:match("^%d+$") and not ob.host:match("^1%.1%.1%.1$") then
+    if ob and idx and valid_ip(ip) and ob.host ~= "" and ob.port:match("^%d+$") and not ob.host:match("^1%.1%.1%.1$") and dns_modes[mac] ~= "compat" then
       local listen_port = listen_base + idx
       io.write(table.concat({
         mac,

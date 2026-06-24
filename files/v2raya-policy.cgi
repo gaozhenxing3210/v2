@@ -1,5 +1,6 @@
 #!/bin/sh
 MAP="/etc/v2raya-policy.map"
+DNSMODE="/etc/v2raya-policy.dnsmode"
 LEASES="/tmp/dhcp.leases"
 APPLY="/usr/bin/v2raya-policy-apply"
 AUTH="/etc/v2raya-policy.auth"
@@ -15,9 +16,13 @@ normalize_mac(){ echo "$1" | tr 'A-F' 'a-f' | sed 's/[^0-9a-f:]//g'; }
 valid_mac(){ echo "$1" | grep -Eq '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'; }
 valid_ip(){ echo "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; }
 valid_outbound(){ echo "$1" | grep -Eq '^(proxy|dev[0-9][0-9])$'; }
+valid_dns_mode(){ echo "$1" | grep -Eq '^(secure|compat)$'; }
 map_outbound(){ awk -v m="$1" '!/^#/ && tolower($1)==m {print $3; exit}' "$MAP" 2>/dev/null; }
 remove_map(){ local mac="$1"; tmp="$MAP.$$"; awk -v m="$mac" 'BEGIN{IGNORECASE=1} /^#/ || NF<3 || tolower($1)!=m {print}' "$MAP" 2>/dev/null > "$tmp"; mv "$tmp" "$MAP"; }
 upsert_map(){ local mac="$1" ip="$2" outbound="$3" label="$4"; mkdir -p /etc; touch "$MAP"; remove_map "$mac"; printf '%s %s %s %s\n' "$mac" "$ip" "$outbound" "$label" >> "$MAP"; }
+dns_mode_get(){ awk -v m="$1" 'BEGIN{IGNORECASE=1} !/^#/ && tolower($1)==tolower(m) {print $2; exit}' "$DNSMODE" 2>/dev/null; }
+dns_mode_remove(){ local mac="$1"; [ -f "$DNSMODE" ] || return 0; tmp="$DNSMODE.$$"; awk -v m="$mac" 'BEGIN{IGNORECASE=1} /^#/ || NF<2 || tolower($1)!=tolower(m) {print}' "$DNSMODE" > "$tmp"; mv "$tmp" "$DNSMODE"; }
+dns_mode_set(){ local mac="$1" mode="$2"; mkdir -p /etc; touch "$DNSMODE"; dns_mode_remove "$mac"; printf '%s %s\n' "$mac" "$mode" >> "$DNSMODE"; }
 api_login(){
   tmp_login="/tmp/v2raya-login.$$"
   lua - "$V2RAYA_USER" "$V2RAYA_PASS" > "$tmp_login" <<'LUA'
@@ -327,6 +332,7 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
       if valid_mac "$mac" && valid_ip "$ip" && [ "$outbound" = "wan" ]; then
         prev_outbound="$(map_outbound "$mac")"
         remove_map "$mac"
+        dns_mode_remove "$mac"
         "$APPLY" >/dev/null 2>&1
         if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then
           restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true
@@ -334,9 +340,24 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
         message="&#24050;&#35774;&#32622; $mac &#36208;&#26412;&#22320;"
       elif valid_mac "$mac" && valid_ip "$ip" && valid_outbound "$outbound"; then upsert_map "$mac" "$ip" "$outbound" "${label:-device}"; "$APPLY" >/dev/null 2>&1; message="&#24050;&#35774;&#32622; $mac -> $outbound"; else message="MAC/IP/&#20986;&#21475;&#26684;&#24335;&#19981;&#23545;"; fi ;;
     wan)
-      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then prev_outbound="$(map_outbound "$mac")"; remove_map "$mac"; "$APPLY" >/dev/null 2>&1; if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true; fi; message="&#24050;&#35774;&#32622; $mac &#36208;&#26412;&#22320;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
+      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then prev_outbound="$(map_outbound "$mac")"; remove_map "$mac"; dns_mode_remove "$mac"; "$APPLY" >/dev/null 2>&1; if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true; fi; message="&#24050;&#35774;&#32622; $mac &#36208;&#26412;&#22320;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
     unbind_map)
-      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then prev_outbound="$(map_outbound "$mac")"; remove_map "$mac"; "$APPLY" >/dev/null 2>&1; if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true; fi; message="&#24050;&#21462;&#28040;&#35774;&#22791;&#32465;&#23450;&#65292;$mac &#24050;&#24674;&#22797;&#33258;&#30001;&#19978;&#32593; / &#20027;&#32593;&#32476;&#30452;&#36830;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
+      mac="$(normalize_mac "$(get_param mac "$BODY")")"; if valid_mac "$mac"; then prev_outbound="$(map_outbound "$mac")"; remove_map "$mac"; dns_mode_remove "$mac"; "$APPLY" >/dev/null 2>&1; if echo "$prev_outbound" | grep -Eq '^dev[0-9][0-9]$' && ! outbound_in_use_by_others "$mac" "$prev_outbound"; then restore_outbound_to_placeholder "$prev_outbound" >/dev/null 2>&1 || true; fi; message="&#24050;&#21462;&#28040;&#35774;&#22791;&#32465;&#23450;&#65292;$mac &#24050;&#24674;&#22797;&#33258;&#30001;&#19978;&#32593; / &#20027;&#32593;&#32476;&#30452;&#36830;"; else message="MAC &#22320;&#22336;&#26684;&#24335;&#19981;&#23545;"; fi ;;
+    dnsmode)
+      mac="$(normalize_mac "$(get_param mac "$BODY")")"; mode="$(get_param mode "$BODY")"
+      if valid_mac "$mac" && valid_dns_mode "$mode"; then
+        if [ "$mode" = "secure" ]; then
+          dns_mode_remove "$mac"
+          mode_label="&#38450;&#27844;&#38706;"
+        else
+          dns_mode_set "$mac" "$mode"
+          mode_label="&#20860;&#23481;"
+        fi
+        "$APPLY" >/dev/null 2>&1
+        message="DNS &#27169;&#24335;&#24050;&#20999;&#25442;&#65306;$mac -> $mode_label"
+      else
+        message="DNS &#27169;&#24335;&#21442;&#25968;&#19981;&#23545;"
+      fi ;;
     apply)
       "$APPLY" >/dev/null 2>&1; message="&#24050;&#37325;&#26032;&#24212;&#29992;&#35268;&#21017;" ;;
     bindout)
@@ -530,9 +551,37 @@ cat <<'HTML'
 HTML
 BIND_OK="$BIND_OK" /usr/libexec/v2raya-bind-html.lua "$touch_file" "$MAP"
 cat <<'HTML'
-</div></section><aside class="panel wide"><h2>&#24403;&#21069;&#35774;&#22791;&#26144;&#23556;</h2><div class="content">
+</div></section><aside class="panel wide"><h2>&#24403;&#21069;&#35774;&#22791;&#26144;&#23556;</h2><div class="content"><div class="section-note">DNS &#27169;&#24335;&#21482;&#23545; SK5 &#33410;&#28857;&#29983;&#25928;&#65306;<b>&#38450;&#27844;&#38706;</b> = DNS &#36319;&#38543;&#20195;&#29702;&#33410;&#28857;&#65292;<b>&#20860;&#23481;</b> = &#19981;&#25509;&#31649;&#35813;&#35774;&#22791; DNS&#65292;&#23613;&#37327;&#20943;&#23569;&#25163;&#26426;&#38544;&#31169;&#35686;&#21578;&#12290;</div>
 HTML
-if [ -s "$MAP" ]; then awk '!/^#/ && NF>=3 {print $1"\t"$2"\t"$3}' "$MAP" | while IFS="$(printf '\t')" read mac ip out; do mac_html="$(printf '%s' "$mac" | html_escape)"; ip_html="$(printf '%s' "$ip" | html_escape)"; if echo "$out" | grep -Eq '^dev[0-9][0-9]$'; then out_html="&#35774;&#22791;${out#dev}"; else out_html="$(printf '%s' "$out" | html_escape)"; fi; printf '<div class="kv"><div class="muted">&#35774;&#22791;</div><div>%s -&gt; %s -&gt; %s</div><form class="kv-action" method="post"><input type="hidden" name="action" value="unbind_map"><input type="hidden" name="mac" value="%s"><button class="unbind-btn" type="submit">&#21462;&#28040;&#32465;&#23450;</button></form></div>' "$mac_html" "$ip_html" "$out_html" "$mac_html"; done; else printf '<div class="muted">&#27809;&#26377;&#35774;&#22791;&#34987;&#25351;&#23450;&#65292;&#20840;&#37096;&#36208;&#26412;&#22320;&#12290;</div>'; fi
+if [ -s "$MAP" ]; then
+  awk '!/^#/ && NF>=3 {print $1"\t"$2"\t"$3}' "$MAP" | while IFS="$(printf '\t')" read mac ip out; do
+    mac_html="$(printf '%s' "$mac" | html_escape)"
+    ip_html="$(printf '%s' "$ip" | html_escape)"
+    if echo "$out" | grep -Eq '^dev[0-9][0-9]$'; then
+      out_html="&#35774;&#22791;${out#dev}"
+      dns_mode="$(dns_mode_get "$mac" || true)"
+      [ -n "$dns_mode" ] || dns_mode="secure"
+      if [ "$dns_mode" = "compat" ]; then
+        dns_label="&#20860;&#23481;"
+        dns_next="secure"
+        dns_btn="&#20999;&#21040;&#38450;&#27844;&#38706;"
+      else
+        dns_label="&#38450;&#27844;&#38706;"
+        dns_next="compat"
+        dns_btn="&#20999;&#21040;&#20860;&#23481;"
+      fi
+      dns_html="$(printf '<span class=\"route proxy\">DNS %s</span>' "$dns_label")"
+      dns_form="$(printf '<form class=\"kv-action\" method=\"post\"><input type=\"hidden\" name=\"action\" value=\"dnsmode\"><input type=\"hidden\" name=\"mac\" value=\"%s\"><input type=\"hidden\" name=\"mode\" value=\"%s\"><button class=\"unbind-btn\" type=\"submit\">%s</button></form>' "$mac_html" "$dns_next" "$dns_btn")"
+    else
+      out_html="$(printf '%s' "$out" | html_escape)"
+      dns_html='<span class="route">&#26412;&#22320;</span>'
+      dns_form=""
+    fi
+    printf '<div class="kv"><div class="muted">&#35774;&#22791;</div><div>%s -&gt; %s -&gt; %s&nbsp;&nbsp;%s</div>%s<form class="kv-action" method="post"><input type="hidden" name="action" value="unbind_map"><input type="hidden" name="mac" value="%s"><button class="unbind-btn" type="submit">&#21462;&#28040;&#32465;&#23450;</button></form></div>' "$mac_html" "$ip_html" "$out_html" "$dns_html" "$dns_form" "$mac_html"
+  done
+else
+  printf '<div class="muted">&#27809;&#26377;&#35774;&#22791;&#34987;&#25351;&#23450;&#65292;&#20840;&#37096;&#36208;&#26412;&#22320;&#12290;</div>'
+fi
 cat <<'HTML'
 </div></aside></div><div class="footer">&#31574;&#30053;&#19981;&#21464;&#65306;&#35774;&#22791; -> &#35774;&#22791;XX -> &#33410;&#28857; ID&#65307;&#26410;&#25351;&#23450;&#35774;&#22791;&#22987;&#32456;&#36208;&#26412;&#22320;&#12290;</div></main><script>
 (function(){
