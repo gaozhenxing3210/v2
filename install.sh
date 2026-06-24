@@ -79,6 +79,48 @@ opkg_update_once() {
   fi
 }
 
+feed_url_works() {
+  url="$1"
+  [ -n "$url" ] || return 1
+  test_url="${url%/}/Packages.gz"
+  if command -v wget >/dev/null 2>&1; then
+    wget -4 --spider --timeout=15 --tries=1 "$test_url" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    curl -4 -I -f --connect-timeout 15 --max-time 30 "$test_url" >/dev/null 2>&1
+    return $?
+  fi
+  return 0
+}
+
+sanitize_optional_opkg_feeds() {
+  distfeeds="/etc/opkg/distfeeds.conf"
+  [ -f "$distfeeds" ] || return 0
+
+  changed=0
+  backup="${distfeeds}.bak.v2raya"
+  [ -f "$backup" ] || cp "$distfeeds" "$backup"
+
+  for feed in immortalwrt_istore immortalwrt_lucky_luci immortalwrt_nas immortalwrt_nas_luci; do
+    line="$(awk -v f="$feed" '$1=="src/gz" && $2==f {print; exit}' "$distfeeds" 2>/dev/null || true)"
+    [ -n "$line" ] || continue
+    url="$(printf '%s\n' "$line" | awk '{print $3}')"
+    if feed_url_works "$url"; then
+      continue
+    fi
+    echo "Disabling broken optional feed: $feed"
+    sed -i "s|^src/gz $feed |# disabled-by-v2raya-policy src/gz $feed |" "$distfeeds"
+    changed=1
+  done
+
+  [ "$changed" = "1" ] || return 0
+  rm -f /var/opkg-lists/immortalwrt_istore \
+        /var/opkg-lists/immortalwrt_lucky_luci \
+        /var/opkg-lists/immortalwrt_nas \
+        /var/opkg-lists/immortalwrt_nas_luci 2>/dev/null || true
+}
+
 install_local_ipks() {
   [ -d ipks ] || return 1
   ipk_files="$(find ipks -type f -name '*.ipk' 2>/dev/null | sort || true)"
@@ -810,6 +852,8 @@ for f in \
 do
   need_file "$f"
 done
+
+sanitize_optional_opkg_feeds
 
 echo "[2/8] installing packages"
 install_packages
