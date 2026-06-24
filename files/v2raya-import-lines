@@ -26,6 +26,69 @@ print(json.stringify({ url = s }))
 LUA
 }
 
+normalize_node_line() {
+  lua - "$1" <<'LUA'
+local path = arg[1]
+local f = io.open(path, "r")
+local s = f and f:read("*a") or ""
+if f then f:close() end
+s = s:gsub("\r", ""):gsub("^%s+", ""):gsub("%s+$", "")
+if s == "" then return end
+
+local function trim(v)
+  return (tostring(v or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function enc(v)
+  v = trim(v)
+  return (v:gsub("([^%w%-%._~])", function(c)
+    return string.format("%%%02X", string.byte(c))
+  end))
+end
+
+local function emit_socks(host, port, user, pass, name)
+  host = trim(host)
+  port = trim(port)
+  user = trim(user)
+  pass = trim(pass)
+  name = trim(name)
+  if host == "" or port == "" or not port:match("^%d+$") then return end
+  local n = tonumber(port)
+  if not n or n < 1 or n > 65535 then return end
+  if name == "" then
+    name = host .. ":" .. port
+  elseif name:match("^%d%d%d%d%-%d%d%-%d%d$") then
+    name = host .. ":" .. port .. " " .. name
+  end
+  local auth = ""
+  if user ~= "" or pass ~= "" then
+    auth = enc(user) .. ":" .. enc(pass) .. "@"
+  end
+  io.write("socks5://" .. auth .. host .. ":" .. port .. "#" .. enc(name))
+end
+
+if s:match("^[%w+.-]+://") then
+  io.write(s)
+  return
+end
+
+local parts = {}
+for piece in (s .. "|"):gmatch("(.-)|") do
+  parts[#parts + 1] = trim(piece)
+end
+
+if #parts == 2 then
+  emit_socks(parts[1], parts[2], "", "", "")
+elseif #parts == 3 then
+  emit_socks(parts[1], parts[2], "", "", parts[3])
+elseif #parts == 4 then
+  emit_socks(parts[1], parts[2], parts[3], parts[4], "")
+elseif #parts >= 5 then
+  emit_socks(parts[1], parts[2], parts[3], parts[4], parts[5])
+end
+LUA
+}
+
 server_ids() {
   lua - "$1" <<'LUA'
 local json = require "luci.jsonc"
@@ -169,7 +232,9 @@ while IFS= read -r raw || [ -n "$raw" ]; do
       dev[0-9]|dev[0-9][0-9]|id[0-9]|id[0-9][0-9]|[0-9]|[0-9][0-9]) node="$rest" ;;
     esac
   fi
-  printf '%s' "$node" | grep -Eq '://' || { echo "line $line_no: skipped, not a node link" >> "$SUMMARY"; fail_count=$((fail_count+1)); continue; }
+  printf '%s' "$node" > "$tmp.raw"
+  node="$(normalize_node_line "$tmp.raw" || true)"
+  [ -n "$node" ] || { echo "line $line_no: skipped, unsupported format (use socks5:// or host|port|user|pass)" >> "$SUMMARY"; fail_count=$((fail_count+1)); continue; }
 
   printf '%s' "$node" > "$tmp.node"
   key="$(node_key "$tmp.node" || true)"
