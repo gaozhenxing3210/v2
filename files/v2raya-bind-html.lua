@@ -88,9 +88,9 @@ local dev_ips = {}
 for line in readfile(map_path):gmatch("[^\n]+") do
   line = (line:gsub("#.*$", "")):gsub("^%s+", ""):gsub("%s+$", "")
   local mac, ip, out = line:match("^(%S+)%s+(%S+)%s+(%S+)")
-  if ip and out and out:match("^dev%d%d$") then
+  if ip and out and out:match("^dev%d%d$") and online_ips[ip] then
     dev_ips[out] = dev_ips[out] or {}
-    table.insert(dev_ips[out], ip .. (online_ips[ip] and "" or " (offline)"))
+    table.insert(dev_ips[out], ip)
   end
 end
 
