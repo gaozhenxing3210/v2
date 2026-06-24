@@ -19,7 +19,7 @@ INSTALL_V2RAYA="${INSTALL_V2RAYA:-1}"
 INSTALL_OFFLINE_IPKS="${INSTALL_OFFLINE_IPKS:-auto}"
 INSTALL_DNSMASQ_FULL="${INSTALL_DNSMASQ_FULL:-0}"
 ENABLE_8088_ENTRY="${ENABLE_8088_ENTRY:-1}"
-ENABLE_DNS_POLICY="${ENABLE_DNS_POLICY:-1}"
+ENABLE_DNS_POLICY="${ENABLE_DNS_POLICY:-0}"
 ENABLE_BBR="${ENABLE_BBR:-1}"
 OPTIMIZE_ROUTER="${OPTIMIZE_ROUTER:-1}"
 OPTIMIZE_WIFI="${OPTIMIZE_WIFI:-1}"
@@ -795,6 +795,7 @@ for f in \
   files/v2raya-policy-apply \
   files/v2raya-device-policy \
   files/v2raya-dns-policy \
+  files/v2raya-socks-compat \
   files/v2raya-socks-dns \
   files/v2raya-socks-dns-proxy.lua \
   files/v2raya-sync-auth \
@@ -820,6 +821,7 @@ cp files/v2raya-policy.cgi /www/cgi-bin/v2raya-policy
 cp files/v2raya-policy-apply /usr/bin/v2raya-policy-apply
 cp files/v2raya-device-policy /usr/bin/v2raya-device-policy
 cp files/v2raya-dns-policy /usr/bin/v2raya-dns-policy
+cp files/v2raya-socks-compat /usr/bin/v2raya-socks-compat
 cp files/v2raya-socks-dns /usr/bin/v2raya-socks-dns
 cp files/v2raya-socks-dns-proxy.lua /usr/libexec/v2raya-socks-dns-proxy.lua
 cp files/v2raya-sync-auth /usr/bin/v2raya-sync-auth
@@ -846,7 +848,7 @@ else
   printf 'Status: 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n\r\nNot Found\n'
 fi
 EOF
-chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-socks-dns /usr/bin/v2raya-sync-auth /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy /etc/init.d/v2raya-policy-boot
+chmod +x /www/cgi-bin/v2raya-policy /usr/bin/v2raya-policy-apply /usr/bin/v2raya-device-policy /usr/bin/v2raya-dns-policy /usr/bin/v2raya-socks-compat /usr/bin/v2raya-socks-dns /usr/bin/v2raya-sync-auth /usr/bin/v2raya-bind /usr/bin/v2raya-import-lines /usr/libexec/v2raya-*.lua /etc/hotplug.d/iface/99-v2raya-device-policy /etc/init.d/v2raya-policy-boot
 chmod +x /www-v2raya-policy/cgi-bin/luci
 
 echo "[4/8] writing auth and device map"

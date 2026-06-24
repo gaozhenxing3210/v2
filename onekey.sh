@@ -8,11 +8,11 @@ KIT_URL="${KIT_URL:-}"
 
 # One-key installs start from a clean v2rayA node list by default.
 # Device MAC/IP bindings stay disabled unless explicitly requested.
-# DNS anti-leak is only enforced for SOCKS5-bound devices through the local
-# v2rayA socks-dns path. The router's own direct DNS settings are left alone.
+# DNS-related interception is disabled by default. SOCKS5 nodes keep using the
+# router's direct DNS path unless you explicitly turn DNS policy back on later.
 RESTORE_V2RAYA_DB="${RESTORE_V2RAYA_DB:-0}"
 RESTORE_DEVICE_MAP="${RESTORE_DEVICE_MAP:-0}"
-ENABLE_DNS_POLICY="${ENABLE_DNS_POLICY:-1}"
+ENABLE_DNS_POLICY="${ENABLE_DNS_POLICY:-0}"
 SET_ROOT_PASSWORD="${SET_ROOT_PASSWORD:-1}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-1}"
 ENABLE_BOOT_START="${ENABLE_BOOT_START:-1}"

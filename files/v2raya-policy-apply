@@ -138,7 +138,7 @@ chmod 644 /etc/v2raya-device-policy.conf
 {
   echo '# v2rayA dns policy'
   echo '# Managed by /cgi-bin/v2raya-policy.'
-  echo 'ENABLE_DNS_POLICY="1"'
+  echo 'ENABLE_DNS_POLICY="0"'
   echo 'LAN_IF="br-lan"'
 } > /etc/v2raya-dns-policy.conf
 chmod 644 /etc/v2raya-dns-policy.conf
@@ -189,5 +189,6 @@ if [ -n "$token" ]; then
   fi
 fi
 /usr/bin/v2raya-device-policy >/dev/null 2>&1 || true
-/usr/bin/v2raya-socks-dns apply >/dev/null 2>&1 || true
+/usr/bin/v2raya-socks-dns stop >/dev/null 2>&1 || true
 /usr/bin/v2raya-dns-policy >/dev/null 2>&1 || true
+/usr/bin/v2raya-socks-compat stop >/dev/null 2>&1 || true

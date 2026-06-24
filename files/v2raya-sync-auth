@@ -36,7 +36,7 @@ if [ ! -f "$AUTH" ]; then
 V2RAYA_API="http://127.0.0.1:2017"
 V2RAYA_USER="$V2_USER"
 V2RAYA_PASS="$V2_PASS"
-ENABLE_DNS_POLICY="1"
+ENABLE_DNS_POLICY="0"
 EOF
 else
   sed -i \
@@ -44,6 +44,7 @@ else
     -e "s#^V2RAYA_PASS=.*#V2RAYA_PASS=\"$V2_PASS\"#" \
     "$AUTH"
   grep -q '^V2RAYA_API=' "$AUTH" || sed -i '1i V2RAYA_API="http://127.0.0.1:2017"' "$AUTH"
+  grep -q '^ENABLE_DNS_POLICY=' "$AUTH" || printf '%s\n' 'ENABLE_DNS_POLICY="0"' >> "$AUTH"
 fi
 
 if [ -f "$CGI" ]; then
