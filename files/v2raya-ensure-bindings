@@ -32,6 +32,17 @@ port_listening() {
   return 1
 }
 
+stale_xray_present() {
+  ps | grep '/usr/bin/xray run --config=/etc/v2raya/config.json' | grep -v grep >/dev/null 2>&1 || return 1
+  port_listening 20170 || port_listening 20171 || port_listening 20172
+}
+
+cleanup_stale_xray() {
+  log "cleanup stale xray runtime"
+  killall xray >/dev/null 2>&1 || true
+  sleep 2
+}
+
 cleanup() {
   rm -rf "$LOCK"
   rm -f /tmp/v2raya-ensure-login.$$ /tmp/v2raya-ensure-touch.$$ /tmp/v2raya-ensure-after.$$ /tmp/v2raya-ensure-seed.$$ /tmp/v2raya-ensure-outbound.$$
@@ -121,6 +132,15 @@ start_runtime_if_needed() {
   running="$(touch_running_state "$touch_file")"
   [ "$running" = "true" ] && return 0
   curl -fsS -m 20 -X POST -H "Authorization: $token" "$V2RAYA_API/api/v2ray" >/dev/null 2>&1 || true
+  curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$touch_file" 2>/dev/null || echo '{}' > "$touch_file"
+  running="$(touch_running_state "$touch_file")"
+  if [ "$running" != "true" ] && stale_xray_present; then
+    cleanup_stale_xray
+    restart_stack || true
+    curl -fsS -m 10 -H "Authorization: $token" "$V2RAYA_API/api/touch" > "$touch_file" 2>/dev/null || echo '{}' > "$touch_file"
+    running="$(touch_running_state "$touch_file")"
+    [ "$running" = "true" ] || curl -fsS -m 20 -X POST -H "Authorization: $token" "$V2RAYA_API/api/v2ray" >/dev/null 2>&1 || true
+  fi
 }
 
 relogin_and_touch() {

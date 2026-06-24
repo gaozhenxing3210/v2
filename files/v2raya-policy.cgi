@@ -155,6 +155,8 @@ port_listening() {
 }
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] restart_bind_runtime_async: begin" >>"$log"
 sleep 1
+killall xray >>"$log" 2>&1 || true
+sleep 1
 /etc/init.d/v2raya restart >>"$log" 2>&1 || /etc/init.d/v2raya start >>"$log" 2>&1 || true
 i=0
 while [ "$i" -lt 20 ]; do
