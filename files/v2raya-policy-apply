@@ -7,9 +7,21 @@ AUTH="/etc/v2raya-policy.auth"
 : "${V2RAYA_PASS:=weifeng}"
 MAP="/etc/v2raya-policy.map"
 HOST_SYNC="/tmp/v2raya-policy.hosts.tsv"
+DEVICE_DNS_CONF="/tmp/dnsmasq.d/v2raya-device-dns.conf"
+DNS_BYPASS_SYNC="/tmp/v2raya-device-dns-bypass.tsv"
+DEVICE_DNS_SERVERS="${DEVICE_DNS_SERVERS:-8.8.8.8,1.1.1.1}"
 /usr/libexec/v2raya-policy-build.lua
 ALLOW_MACS="$(cat /tmp/v2raya-policy.allow-macs 2>/dev/null || true)"
 COUNT="$(cat /tmp/v2raya-policy.active-count 2>/dev/null || echo 0)"
+write_if_changed() {
+  local target="$1" tmp="$2"
+  mkdir -p "$(dirname "$target")"
+  if [ ! -f "$target" ] || ! cmp -s "$tmp" "$target" 2>/dev/null; then
+    cp "$tmp" "$target"
+    return 0
+  fi
+  return 1
+}
 find_dhcp_host_section_by_mac() {
   local mac_lc="$1"
   uci show dhcp 2>/dev/null | awk -v m="$mac_lc" '
@@ -140,10 +152,21 @@ chmod 644 /etc/v2raya-device-policy.conf
   echo '# Managed by /cgi-bin/v2raya-policy.'
   echo 'ENABLE_DNS_POLICY="0"'
   echo 'LAN_IF="br-lan"'
+  printf 'DEVICE_DNS_SERVERS="%s"\n' "$DEVICE_DNS_SERVERS"
+  printf 'DEVICE_DNS_BYPASS_LIST="%s"\n' "$DNS_BYPASS_SYNC"
 } > /etc/v2raya-dns-policy.conf
 chmod 644 /etc/v2raya-dns-policy.conf
+dhcp_changed=0
+dns_cfg_changed=0
+tmp_dns_conf="/tmp/v2raya-device-dns.conf.$$"
+tmp_bypass="/tmp/v2raya-device-dns-bypass.tsv.$$"
+device_dns_count=0
+{
+  echo '# v2rayA per-device DNS'
+  echo '# Managed by /cgi-bin/v2raya-policy.'
+} > "$tmp_dns_conf"
+: > "$tmp_bypass"
 if [ -s "$HOST_SYNC" ]; then
-  dhcp_changed=0
   while IFS="$(printf '\t')" read mac ip; do
     case "$mac" in ''|*[!0-9a-fA-F:]*) continue ;; esac
     case "$ip" in *.*.*.*) ;; *) continue ;; esac
@@ -155,12 +178,25 @@ if [ -s "$HOST_SYNC" ]; then
     uci set dhcp.$s.mac="$mac"
     uci set dhcp.$s.ip="$ip"
     dhcp_changed=1
+    tag="v2p_$(echo "$mac" | tr 'A-F:' 'a-f_' | tr -cd '0-9a-z_')"
+    printf 'dhcp-mac=set:%s,%s\n' "$tag" "$mac" >> "$tmp_dns_conf"
+    printf 'dhcp-option=tag:%s,6,%s\n' "$tag" "$DEVICE_DNS_SERVERS" >> "$tmp_dns_conf"
+    printf '%s\n' "$ip" >> "$tmp_bypass"
+    device_dns_count=$((device_dns_count + 1))
   done < "$HOST_SYNC"
-  if [ "$dhcp_changed" = "1" ]; then
-    uci commit dhcp
-    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || /etc/init.d/dnsmasq reload >/dev/null 2>&1 || true
-    /etc/init.d/odhcpd reload >/dev/null 2>&1 || true
-  fi
+fi
+if [ "$device_dns_count" -gt 0 ]; then
+  write_if_changed "$DEVICE_DNS_CONF" "$tmp_dns_conf" && dns_cfg_changed=1 || true
+  write_if_changed "$DNS_BYPASS_SYNC" "$tmp_bypass" >/dev/null 2>&1 || true
+else
+  [ -f "$DEVICE_DNS_CONF" ] && rm -f "$DEVICE_DNS_CONF" && dns_cfg_changed=1 || true
+  [ -f "$DNS_BYPASS_SYNC" ] && rm -f "$DNS_BYPASS_SYNC" || true
+fi
+rm -f "$tmp_dns_conf" "$tmp_bypass"
+if [ "$dhcp_changed" = "1" ] || [ "$dns_cfg_changed" = "1" ]; then
+  uci commit dhcp
+  /etc/init.d/dnsmasq restart >/dev/null 2>&1 || /etc/init.d/dnsmasq reload >/dev/null 2>&1 || true
+  /etc/init.d/odhcpd reload >/dev/null 2>&1 || true
 fi
 tmp_login="/tmp/v2raya-login.$$"
 lua - "$V2RAYA_USER" "$V2RAYA_PASS" > "$tmp_login" <<'LUA'

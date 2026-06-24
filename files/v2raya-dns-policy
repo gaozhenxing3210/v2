@@ -15,8 +15,10 @@ TABLE_NAME="codex_v2raya_dns"
 CHAIN_NAME="dstnat"
 COMMENT_TAG="codex-v2raya-dns-policy"
 LEGACY_CHAIN="CODEX_V2RAYA_DNS"
+DEVICE_BYPASS_CHAIN="CODEX_V2RAYA_DNS_BYPASS"
 LAN_IP="$(uci -q get network.lan.ipaddr 2>/dev/null || echo 192.168.1.1)"
 SOCKS_DNS_REDIRECTS="/tmp/v2raya-socks-dns.redirects.tsv"
+DEVICE_DNS_BYPASS_LIST="${DEVICE_DNS_BYPASS_LIST:-/tmp/v2raya-device-dns-bypass.tsv}"
 
 ensure_table() {
   $NFT list table "$TABLE_FAMILY" "$TABLE_NAME" >/dev/null 2>&1 || $NFT add table "$TABLE_FAMILY" "$TABLE_NAME"
@@ -42,14 +44,41 @@ remove_legacy_chain() {
   $IPTABLES -w 2 -t nat -F "$LEGACY_CHAIN" 2>/dev/null || true
   $IPTABLES -w 2 -t nat -X "$LEGACY_CHAIN" 2>/dev/null || true
 }
+ensure_device_bypass_chain() {
+  $IPTABLES -w 2 -t nat -N "$DEVICE_BYPASS_CHAIN" 2>/dev/null || true
+  $IPTABLES -w 2 -t nat -C PREROUTING -i "$LAN_IF" -p udp --dport 53 -j "$DEVICE_BYPASS_CHAIN" 2>/dev/null || \
+    $IPTABLES -w 2 -t nat -I PREROUTING 1 -i "$LAN_IF" -p udp --dport 53 -j "$DEVICE_BYPASS_CHAIN"
+  $IPTABLES -w 2 -t nat -C PREROUTING -i "$LAN_IF" -p tcp --dport 53 -j "$DEVICE_BYPASS_CHAIN" 2>/dev/null || \
+    $IPTABLES -w 2 -t nat -I PREROUTING 1 -i "$LAN_IF" -p tcp --dport 53 -j "$DEVICE_BYPASS_CHAIN"
+}
 
-if [ "$ENABLE_DNS_POLICY" != "1" ]; then
+remove_device_bypass_chain() {
+  $IPTABLES -w 2 -t nat -D PREROUTING -i "$LAN_IF" -p udp --dport 53 -j "$DEVICE_BYPASS_CHAIN" 2>/dev/null || true
+  $IPTABLES -w 2 -t nat -D PREROUTING -i "$LAN_IF" -p tcp --dport 53 -j "$DEVICE_BYPASS_CHAIN" 2>/dev/null || true
+  $IPTABLES -w 2 -t nat -F "$DEVICE_BYPASS_CHAIN" 2>/dev/null || true
+  $IPTABLES -w 2 -t nat -X "$DEVICE_BYPASS_CHAIN" 2>/dev/null || true
+}
+
+apply_device_bypass() {
   remove_table
   remove_legacy_chain
+  ensure_device_bypass_chain
+  $IPTABLES -w 2 -t nat -F "$DEVICE_BYPASS_CHAIN"
+  [ -f "$DEVICE_DNS_BYPASS_LIST" ] || return 0
+  while IFS= read -r ip; do
+    case "$ip" in *.*.*.*) ;; *) continue ;; esac
+    $IPTABLES -w 2 -t nat -A "$DEVICE_BYPASS_CHAIN" -s "$ip" -p udp --dport 53 -j ACCEPT
+    $IPTABLES -w 2 -t nat -A "$DEVICE_BYPASS_CHAIN" -s "$ip" -p tcp --dport 53 -j ACCEPT
+  done < "$DEVICE_DNS_BYPASS_LIST"
+}
+
+if [ "$ENABLE_DNS_POLICY" != "1" ]; then
+  apply_device_bypass
   exit 0
 fi
 
 if command -v "$NFT" >/dev/null 2>&1; then
+  remove_device_bypass_chain
   remove_legacy_chain
   ensure_table
   $NFT flush chain "$TABLE_FAMILY" "$TABLE_NAME" "$CHAIN_NAME"
@@ -63,6 +92,7 @@ if command -v "$NFT" >/dev/null 2>&1; then
   fi
 else
   remove_table
+  remove_device_bypass_chain
   ensure_legacy_chain
   $IPTABLES -w 2 -t nat -F "$LEGACY_CHAIN"
   $IPTABLES -w 2 -t nat -A "$LEGACY_CHAIN" -d "$LAN_IP" -j RETURN
