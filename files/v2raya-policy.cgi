@@ -54,11 +54,40 @@ for _, c in ipairs(touch.connectedServer or {}) do
 end
 LUA
 }
+proxy_is_placeholder(){
+  lua - "$1" <<'LUA'
+local json = require "luci.jsonc"
+local f = io.open(arg[1], "r")
+local obj = json.parse(f and f:read("*a") or "{}") or {}
+if f then f:close() end
+local touch = obj.data and obj.data.touch or {}
+local proxy_id, proxy_type, proxy_sub
+for _, c in ipairs(touch.connectedServer or {}) do
+  if tostring(c.outbound or "") == "proxy" then
+    proxy_id = tostring(c.id or "")
+    proxy_type = tostring(c._type or "server")
+    proxy_sub = tostring(c.sub or 0)
+    break
+  end
+end
+if proxy_id == nil then
+  return
+end
+for _, s in ipairs(touch.servers or {}) do
+  if tostring(s.id or "") == proxy_id and proxy_type == "server" and proxy_sub == "0" then
+    if tostring(s.address or ""):match("^1%.1%.1%.1") then
+      print("1")
+    end
+    return
+  end
+end
+LUA
+}
 touch_running_state(){
   jsonfilter -q -i "$1" -e '@.data.running' 2>/dev/null || true
 }
 bootstrap_bind_runtime(){
-  local outbound="$1" typ="$2" id="$3" sub="$4" token2 tmp_touch proxy_ref running
+  local outbound="$1" typ="$2" id="$3" sub="$4" token2 tmp_touch proxy_ref proxy_placeholder running
   token2="$(api_login)"
   [ -n "$token2" ] || return 1
   api_create_outbound "$token2" "proxy"
@@ -66,7 +95,8 @@ bootstrap_bind_runtime(){
   tmp_touch="/tmp/v2raya-bind-touch.$$"
   curl -fsS -m 10 -H "Authorization: $token2" "$V2RAYA_API/api/touch" > "$tmp_touch" 2>/dev/null || echo '{}' > "$tmp_touch"
   proxy_ref="$(proxy_ref_from_touch "$tmp_touch" || true)"
-  if [ -z "$proxy_ref" ] && [ -n "$id" ] && [ -n "$typ" ]; then
+  proxy_placeholder="$(proxy_is_placeholder "$tmp_touch" || true)"
+  if { [ -z "$proxy_ref" ] || [ "$proxy_placeholder" = "1" ]; } && [ -n "$id" ] && [ -n "$typ" ]; then
     /usr/bin/v2raya-bind proxy "$id" "$typ" "$sub" >/dev/null 2>&1 || true
   fi
   rm -f "$tmp_touch"
