@@ -3,24 +3,9 @@ set -eu
 
 REPO="${REPO:-gaozhenxing3210/v2}"
 BRANCH="${BRANCH:-main}"
-WORK_DIR="${WORK_DIR:-/tmp/pwdev-onekey}"
-SCRIPT_URL="${SCRIPT_URL:-}"
+BOOTSTRAP_URL="${BOOTSTRAP_URL:-}"
+WORK_DIR="${WORK_DIR:-/tmp/pwdev-fast}"
 MIRRORS="${MIRRORS:-jsdelivr ghproxy githubraw githubcom}"
-DNS_SERVERS="${DNS_SERVERS:-223.5.5.5 119.29.29.29 1.1.1.1}"
-AUTO_APPLY="${AUTO_APPLY:-0}"
-PREFIX="${PREFIX:-PC}"
-UPSTREAM_IP="${UPSTREAM_IP:-}"
-UPSTREAM_PORT="${UPSTREAM_PORT:-}"
-
-boost_dns() {
-  mkdir -p /tmp/resolv.conf.d
-  tmp_dns="/tmp/resolv.conf.d/resolv.conf.auto"
-  : > "$tmp_dns"
-  for ns in $DNS_SERVERS; do
-    printf 'nameserver %s\n' "$ns" >> "$tmp_dns"
-  done
-  ln -sf "$tmp_dns" /tmp/resolv.conf
-}
 
 download() {
   url="$1"
@@ -60,11 +45,14 @@ mirror_url() {
   esac
 }
 
-download_from_mirrors() {
-  path="$1"
-  out="$2"
+download_bootstrap() {
+  out="$1"
+  if [ -n "$BOOTSTRAP_URL" ]; then
+    download "$BOOTSTRAP_URL" "$out"
+    return $?
+  fi
   for mirror in $MIRRORS; do
-    url="$(mirror_url "$mirror" "$path" || true)"
+    url="$(mirror_url "$mirror" "pwdev-onekey.sh" || true)"
     [ -n "$url" ] || continue
     if download "$url" "$out"; then
       echo "Using mirror: $mirror"
@@ -76,29 +64,12 @@ download_from_mirrors() {
 
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
-script="$WORK_DIR/pwdev-install.sh"
-boost_dns || true
+script="$WORK_DIR/pwdev-onekey.sh"
 
-if [ -n "$SCRIPT_URL" ]; then
-  download "$SCRIPT_URL" "$script"
-else
-  if ! download_from_mirrors "passwall-pwdev-install.sh" "$script"; then
-    echo "download failed from all GitHub URLs." >&2
-    exit 1
-  fi
+if ! download_bootstrap "$script"; then
+  echo "download failed from all mirrors." >&2
+  exit 1
 fi
 
 chmod +x "$script"
-sh "$script"
-
-if [ "$AUTO_APPLY" = "1" ]; then
-  if [ -n "$UPSTREAM_IP" ]; then
-    if [ -n "$UPSTREAM_PORT" ]; then
-      pwdev apply-online-all "$PREFIX" "$UPSTREAM_IP" "$UPSTREAM_PORT"
-    else
-      pwdev apply-online-all "$PREFIX" "$UPSTREAM_IP"
-    fi
-  else
-    pwdev apply-online-all "$PREFIX"
-  fi
-fi
+sh "$script" "$@"
